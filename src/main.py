@@ -1,6 +1,37 @@
 import pygame
 import os
 import sys
+import math
+
+LOBBY_STAGE_NAMES = [
+    'Floresta', 'Cidade', 'Templo', 'Vórtex', 'Personalizada'
+]
+
+LOBBY_STAGE_COLORS = [
+    (95, 170, 95),
+    (95, 155, 205),
+    (220, 165, 90),
+    (200, 95, 175),
+    (255, 200, 110),
+]
+
+LOBBY_WORLD_XMIN = -800
+LOBBY_WORLD_YMIN = -600
+LOBBY_WORLD_XMAX = 800
+LOBBY_WORLD_YMAX = 600
+LOBBY_GRID_SPACING = 100
+LOBBY_VIEW_W = 620
+LOBBY_VIEW_H = 420
+
+LOBBY_STAGE_POS = [
+    (-500, 350),  # Floresta (Superior Esquerda)
+    (500, 350),   # Cidade (Superior Direita)
+    (-500, -350), # Templo (Inferior Esquerda)
+    (500, -350),  # Vórtex (Inferior Direita)
+    (0, 0),       # Personalizada (Centro)
+]
+
+LOBBY_ENTRY_RADIUS = 64
 
 from src.config import (
     W, H, LANE_W, LANE_COUNT, TARGET_Y, SPAWN_OFFSET, FALL_TIME,
@@ -23,8 +54,11 @@ from src.music_backend.backend_config import (
 )
 
 from src.lib.cg_lib import (
-    line_bresenham, scanline_fill
+    Window, Viewport, boundary_fill, circle_midpoint, cohen_sutherland_clip,
+    draw_line_clipped, draw_line_viewport, draw_polygon, draw_polygon_viewport,
+    ellipse_midpoint, flood_fill, line_bresenham, scanline_fill, set_pixel
 )
+
 class RhythmGame:
 
     def __init__(self):
@@ -32,7 +66,7 @@ class RhythmGame:
         pygame.mixer.init(44100, -16, 2, 512)
 
         self.screen = pygame.display.set_mode((W, H))
-        pygame.display.set_caption("RhythmPy ♪")
+        pygame.display.set_caption("Re:Song")
         self.clock  = pygame.time.Clock()
 
         self.f_xl = pygame.font.SysFont('monospace', 42, bold=True)
@@ -69,12 +103,31 @@ class RhythmGame:
 
         self.sprites = load_sprites()
 
-        self.state      = 'menu'
-        self.music_path = None
-        self.input_text = sys.argv[1] if len(sys.argv) > 1 else ''
-        self.menu_error = ''
-        self.difficulty  = 'Normal'
+        self.menu_bg_image = self._load_menu_bg_image()
+        self.menu_art = self._build_menu_art()
+        self._lobby_bg_surf = self._build_lobby_background()
+        self.menu_page = 'main'
+        self._menu_buttons = []
+        self._lobby_buttons = []
+        self._exit_requested = False
+
+        self.state          = 'menu'
+        self.menu_selection = 0
+        self.music_path     = None
+        self.input_text     = sys.argv[1] if len(sys.argv) > 1 else ''
+        self.menu_error     = ''
+        self.difficulty     = 'Normal'
+        self.stage_idx      = 0
+        self.selected_stage = None
         self._raw_events = []
+
+        self.lobby_px   = 0.0
+        self.lobby_py   = 0.0
+        self.lobby_speed= 180.0
+        self.lobby_anim_t = 0.0
+        self.lobby_entered_stage = None
+        self.lobby_stage_selected = None
+        self.lobby_last_move = 'idle'
 
         self.notes:     list[Note] = []
         self.score      = 0
@@ -101,9 +154,11 @@ class RhythmGame:
         return pos / 1000.0 if pos >= 0 else self.duration + 10.0
 
 
-    def load_song(self, path: str, reuse_raw: bool = False) -> None:
+    def load_song(self, path: str, reuse_raw: bool = False, stage_idx: int = 0) -> None:
+        self.stage_idx = stage_idx if stage_idx is not None else 0
         d2x = {d: self.lane_xs[i] for i, d in enumerate(DIRECTIONS)}
 
+        duration = self.duration
         if not reuse_raw or not self._raw_events:
             self.screen.blit(self.bg_surf, (0, 0))
             diff_c = DIFFICULTY_COLORS[self.difficulty]
@@ -246,11 +301,19 @@ class RhythmGame:
             y -= surf.get_height() // 2
         self.screen.blit(surf, (x, y))
 
+    def _default_stage_music_path(self) -> str:
+        return os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'musics', 'music.mp3'))
 
     def _draw_playing(self) -> None:
         scr = self.screen
 
         scr.blit(self.bg_surf, (0, 0))
+
+        if 0 <= self.stage_idx < len(LOBBY_STAGE_COLORS):
+            theme = LOBBY_STAGE_COLORS[self.stage_idx]
+            overlay = pygame.Surface((W, H), pygame.SRCALPHA)
+            overlay.fill((theme[0], theme[1], theme[2], 24))
+            scr.blit(overlay, (0, 0))
 
         intensity = self._current_intensity()
         if intensity > 0.30:
@@ -322,6 +385,8 @@ class RhythmGame:
 
         self._txt(self.f_lg, f'SCORE  {self.score:07d}', 16, 12, (220, 220, 255))
         self._txt(self.f_md, f'COMBO  {self.combo}×',    16, 48, (160, 160, 255))
+        stage_name = LOBBY_STAGE_NAMES[self.stage_idx] if 0 <= self.stage_idx < len(LOBBY_STAGE_NAMES) else 'Fase'
+        self._txt(self.f_sm, f'FASE  {stage_name}',      16, 78, (180, 180, 255))
 
         intensity = self._current_intensity()
         if   intensity < 0.35: mood, mc = 'calmo',   (100, 180, 255)
@@ -360,6 +425,52 @@ class RhythmGame:
         self._txt(self.f_sm, hint, self.lane_left, H - 22, (70, 70, 110))
 
 
+    def _load_menu_bg_image(self):
+        base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+        screens_dir = os.path.join(base_dir, 'screens')
+        if not os.path.isdir(screens_dir):
+            return None
+
+        candidates = [
+            os.path.join(screens_dir, fn)
+            for fn in sorted(os.listdir(screens_dir))
+            if fn.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp', '.webp'))
+        ]
+        for img_path in candidates:
+            try:
+                return pygame.image.load(img_path).convert()
+            except Exception:
+                continue
+        return None
+
+
+    def _draw_background_from_image(self, surf, image):
+        src_w, src_h = image.get_width(), image.get_height()
+        if src_w == 0 or src_h == 0:
+            return
+        for y in range(H):
+            src_y = int(y * src_h / H)
+            if src_y >= src_h:
+                src_y = src_h - 1
+            for x in range(W):
+                src_x = int(x * src_w / W)
+                if src_x >= src_w:
+                    src_x = src_w - 1
+                color = image.get_at((src_x, src_y))[:3]
+                set_pixel(surf, x, y, color)
+
+
+    def _build_menu_art(self):
+        surf = pygame.Surface((W, H))
+        surf.fill((12, 14, 36))
+
+        if self.menu_bg_image:
+            self._draw_background_from_image(surf, self.menu_bg_image)
+
+
+        return surf
+
+
     def _draw_btn(self, scr, bx, by, bw, bh, label, font,
                   active=False, color=(115,75,250)):
         bg  = tuple(min(255, c // 2 + (30 if active else 0)) for c in color)
@@ -376,75 +487,329 @@ class RhythmGame:
 
     def _draw_menu(self) -> None:
         scr = self.screen
-        scr.blit(self.bg_surf, (0, 0))
+        scr.blit(self.menu_art, (0, 0))
 
-        self._txt(self.f_xl, '♪  RhythmPy  ♪', W // 2, 55,
-                  (188, 148, 255), center=True)
-        self._txt(self.f_sm, 'Pressione as setas no momento certo para acertar as notas!',
-                  W // 2, 105, (150, 150, 210), center=True)
-        self._txt(self.f_sm, 'Cole o caminho do arquivo de música abaixo:',
-                  W // 2, 135, (175, 175, 240), center=True)
+        self._txt(self.f_xl, 'Re:Song', W // 2, 52, (245, 245, 245), center=True)
+        self._txt(self.f_md, 'E mesmo quando tudo der errado, você ainda pode recomeçar do zero',
+                  W // 2, 100, (225, 225, 235), center=True)
 
-        bx, by, bw, bh = 55, 162, W - 110, 42
-        scanline_fill(scr, [(bx,by),(bx+bw,by),(bx+bw,by+bh),(bx,by+bh)], (20, 20, 50))
-        cb = (105, 105, 255)
-        line_bresenham(scr, bx,    by,    bx+bw, by,    cb)
-        line_bresenham(scr, bx+bw, by,    bx+bw, by+bh, cb)
-        line_bresenham(scr, bx+bw, by+bh, bx,    by+bh, cb)
-        line_bresenham(scr, bx,    by+bh, bx,    by,    cb)
-        display = self.input_text[-72:] + '|'
-        self._txt(self.f_sm, display, bx + 10, by + 12, (215, 215, 255))
+        btn_w, btn_h, gap = 220, 54, 20
+        start_x = W // 2 - btn_w // 2
+        start_y = 160
+        menu_buttons = [
+            ('JOGAR', start_x, start_y, btn_w, btn_h, 'play', (95, 180, 255)),
+            ('TUTORIAL', start_x, start_y + btn_h + gap, btn_w, btn_h, 'tutorial', (155, 115, 235)),
+            ('SAIR', start_x, start_y + 2 * (btn_h + gap), btn_w, btn_h, 'exit', (235, 90, 110)),
+        ]
 
-        self._txt(self.f_md, 'Dificuldade:', W // 2, 222, (180, 180, 240), center=True)
-
-        n_diff   = len(DIFFICULTY_NAMES)
-        btn_w    = 170
-        gap      = 14
-        total_bw = n_diff * btn_w + (n_diff - 1) * gap
-        start_x  = (W - total_bw) // 2
-        btn_h    = 44
-
-        self._diff_btns = []
-        for i, name in enumerate(DIFFICULTY_NAMES):
-            bx2 = start_x + i * (btn_w + gap)
-            by2 = 244
-            col = DIFFICULTY_COLORS[name]
-            is_sel = (name == self.difficulty)
-            self._draw_btn(scr, bx2, by2, btn_w, btn_h, name, self.f_md,
-                           active=is_sel, color=col)
-            desc = {'Fácil': '~2 notas/s', 'Normal': '~4 notas/s',
-                    'Difícil': '~6 notas/s', 'Expert': '~9 notas/s'}[name]
-            dc = col if is_sel else (90, 90, 120)
-            self._txt(self.f_sm, desc, bx2 + btn_w // 2, by2 + btn_h + 8, dc, center=True)
-            self._diff_btns.append((bx2, by2, btn_w, btn_h + 22, name))
-
-        hints = {
-            'Fácil':   'Apenas os beats principais. Ideal para iniciantes.',
-            'Normal':  'Beats + onsets fortes. Bom equilíbrio.',
-            'Difícil': 'Maioria dos onsets + acordes nos picos de intensidade.',
-            'Expert':  'Quase todos os onsets. Acordes frequentes. Boa sorte!',
-        }
-        hc = DIFFICULTY_COLORS[self.difficulty]
-        self._txt(self.f_sm, hints[self.difficulty], W // 2, 318, hc, center=True)
-
-        self._btnx, self._btny = W // 2 - 130, 340
-        self._btnw, self._btnh = 260, 52
-        bx2, by2, bw2, bh2 = self._btnx, self._btny, self._btnw, self._btnh
-        self._draw_btn(scr, bx2, by2, bw2, bh2, '▶  INICIAR', self.f_lg,
-                       active=True, color=(115, 75, 250))
+        self._menu_buttons = []
+        for i, (label, bx, by, bw, bh, action, color) in enumerate(menu_buttons):
+            self._draw_btn(scr, bx, by, bw, bh, label, self.f_md,
+                           active=(i == self.menu_selection), color=color)
+            self._menu_buttons.append((bx, by, bw, bh, action))
 
         if self.menu_error:
-            self._txt(self.f_sm, self.menu_error, W // 2, 405, (255, 85, 85), center=True)
+            self._txt(self.f_sm, self.menu_error, W // 2, H - 140, (255, 90, 90), center=True)
 
-        try:
-            import librosa
-            st, sc = 'librosa ✓  análise espectral por banda de frequência', (80, 200, 80)
-        except ImportError:
-            st, sc = 'librosa não instalado → BPM fixo 120.  pip install librosa', (200, 150, 70)
-        self._txt(self.f_sm, st, W // 2, H - 40, sc, center=True)
+        self._txt(self.f_sm, 'ESC = sair   |   JOGAR leva ao lobby de fases',
+                  W // 2, H - 24, (185, 185, 210), center=True)
+
+    def _world_to_screen(self, wx: float, wy: float) -> tuple[int, int]:
+        return (int(W // 2 + (wx - self.lobby_px)), int(H // 2 - (wy - self.lobby_py)))
+
+    def _clamp_lobby_player(self) -> None:
+        lim = 320
+        self.lobby_px = max(LOBBY_WORLD_XMIN + 20, min(LOBBY_WORLD_XMAX - 20, self.lobby_px))
+        self.lobby_py = max(LOBBY_WORLD_YMIN + 20, min(LOBBY_WORLD_YMAX - 20, self.lobby_py))
+
+    def _world_to_bg(self, wx: float, wy: float) -> tuple[int, int]:
+        return (int(wx - LOBBY_WORLD_XMIN), int(LOBBY_WORLD_YMAX - wy))
+
+    def _build_lobby_background(self) -> pygame.Surface:
+        width = LOBBY_WORLD_XMAX - LOBBY_WORLD_XMIN
+        height = LOBBY_WORLD_YMAX - LOBBY_WORLD_YMIN
+        surf = pygame.Surface((width, height))
+        surf.fill((14, 18, 34))
+
+        for gx in range(LOBBY_WORLD_XMIN + 20, LOBBY_WORLD_XMAX, LOBBY_GRID_SPACING):
+            x = gx - LOBBY_WORLD_XMIN
+            line_bresenham(surf, x, 0, x, height, (30, 30, 55))
+        for gy in range(LOBBY_WORLD_YMIN + 20, LOBBY_WORLD_YMAX, LOBBY_GRID_SPACING):
+            y = LOBBY_WORLD_YMAX - gy
+            line_bresenham(surf, 0, y, width, y, (30, 30, 55))
+
+        for i, (wx, wy) in enumerate(LOBBY_STAGE_POS):
+            sx, sy = self._world_to_bg(wx, wy)
+            radius = 60 if i < 4 else 88
+            circle_midpoint(surf, sx, sy, radius, LOBBY_STAGE_COLORS[i])
+            flood_fill(surf, sx, sy, tuple(min(255, c + 30) for c in LOBBY_STAGE_COLORS[i]))
+            poly = [
+                self._world_to_bg(wx + radius * math.cos(a), wy + radius * math.sin(a))
+                for a in [k * math.pi / 3 for k in range(6)]
+            ]
+            draw_polygon(surf, poly, (255, 255, 255))
+            label = self.f_md.render(LOBBY_STAGE_NAMES[i], True, (235, 235, 235))
+            surf.blit(label, (sx - label.get_width() // 2, sy - radius - 24))
+
+        return surf
+
+    def _lobby_difficulty_buttons(self):
+        gap = 16
+        btn_w = 140
+        btn_h = 40
+        y = H - 160
+        total_w = len(DIFFICULTY_NAMES) * btn_w + (len(DIFFICULTY_NAMES) - 1) * gap
+        start_x = (W - total_w) // 2
+        return [
+            (name, start_x + i * (btn_w + gap), y, btn_w, btn_h, name)
+            for i, name in enumerate(DIFFICULTY_NAMES)
+        ]
+
+    def _update_lobby(self, events, dt: float) -> None:
+        keys = pygame.key.get_pressed()
+        move_x = move_y = 0.0
+        if self.lobby_stage_selected is None:
+            if keys[pygame.K_w] or keys[pygame.K_UP]:    move_y += 1.0
+            if keys[pygame.K_s] or keys[pygame.K_DOWN]:  move_y -= 1.0
+            if keys[pygame.K_a] or keys[pygame.K_LEFT]:  move_x -= 1.0
+            if keys[pygame.K_d] or keys[pygame.K_RIGHT]: move_x += 1.0
+
+        if move_x != 0.0 or move_y != 0.0:
+            length = math.hypot(move_x, move_y)
+            self.lobby_px += self.lobby_speed * dt * move_x / length
+            self.lobby_py += self.lobby_speed * dt * move_y / length
+            self.lobby_anim_t += dt
+
+            if abs(move_x) > abs(move_y):
+                self.lobby_last_move = 'right' if move_x > 0 else 'left'
+            else:
+                self.lobby_last_move = 'up' if move_y > 0 else 'down'
+        else:
+            self.lobby_anim_t = 0.0
+
+        self._clamp_lobby_player()
+
+        near = None
+        for i, (wx, wy) in enumerate(LOBBY_STAGE_POS):
+            dist = math.hypot(self.lobby_px - wx, self.lobby_py - wy)
+            if dist < LOBBY_ENTRY_RADIUS:
+                near = i
+                break
+        self.lobby_entered_stage = near
+        if self.lobby_entered_stage is None:
+            self.lobby_stage_selected = None
+
+        for ev in events:
+            if ev.type == pygame.KEYDOWN:
+                if ev.key == pygame.K_ESCAPE:
+                    if self.lobby_stage_selected is not None:
+                        self.lobby_stage_selected = None
+                    else:
+                        self.state = 'menu'
+                elif ev.key == pygame.K_RETURN:
+                    if self.lobby_stage_selected is None and self.lobby_entered_stage is not None:
+                        self.lobby_stage_selected = self.lobby_entered_stage
+                        if self.lobby_stage_selected == 4:
+                            self.input_text = ''
+                    elif self.lobby_stage_selected == 4:
+                        self._try_start(stage_idx=4)
+                    elif self.lobby_stage_selected in {0, 1, 2, 3}:
+                        self._try_start(stage_idx=self.lobby_stage_selected, difficulty=self.difficulty)
+                elif self.lobby_stage_selected in {0, 1, 2, 3} and ev.key in {pygame.K_LEFT, pygame.K_a, pygame.K_RIGHT, pygame.K_d}:
+                    idx = DIFFICULTY_NAMES.index(self.difficulty)
+                    if ev.key in {pygame.K_LEFT, pygame.K_a}:
+                        idx = (idx - 1) % len(DIFFICULTY_NAMES)
+                    else:
+                        idx = (idx + 1) % len(DIFFICULTY_NAMES)
+                    self.difficulty = DIFFICULTY_NAMES[idx]
+                elif self.lobby_stage_selected == 4:
+                    if ev.key == pygame.K_BACKSPACE:
+                        self.input_text = self.input_text[:-1]
+                    elif ev.unicode:
+                        self.input_text += ev.unicode
+            elif ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 1:
+                if self.lobby_stage_selected in {0, 1, 2, 3}:
+                    mx, my = ev.pos
+                    for lbl, bx, by, bw, bh, name in self._lobby_difficulty_buttons():
+                        if bx <= mx <= bx + bw and by <= my <= by + bh:
+                            self._try_start(stage_idx=self.lobby_stage_selected, difficulty=name)
+                            break
+
+    def _draw_lobby(self) -> None:
+        scr = self.screen
+        scr.blit(self.menu_art, (0, 0))
+
+        view_x = (W - LOBBY_VIEW_W) // 2
+        view_y = 120
+
+        player_bg_x = int(self.lobby_px - LOBBY_WORLD_XMIN)
+        player_bg_y = int(LOBBY_WORLD_YMAX - self.lobby_py)
+
+        map_x = LOBBY_VIEW_W // 2 - player_bg_x
+        map_y = LOBBY_VIEW_H // 2 - player_bg_y
+
+        map_x = max(LOBBY_VIEW_W - self._lobby_bg_surf.get_width(), min(0, map_x))
+        map_y = max(LOBBY_VIEW_H - self._lobby_bg_surf.get_height(), min(0, map_y))
+
+        map_x = min(0, max(map_x, LOBBY_VIEW_W - self._lobby_bg_surf.get_width()))
+        map_y = min(0, max(map_y, LOBBY_VIEW_H - self._lobby_bg_surf.get_height()))
+
+        view_surf = pygame.Surface((LOBBY_VIEW_W, LOBBY_VIEW_H))
+        view_surf.fill((10, 14, 28))
+        view_surf.blit(self._lobby_bg_surf, (map_x, map_y))
+        scr.blit(view_surf, (view_x, view_y))
+        line_bresenham(scr, view_x, view_y, view_x + LOBBY_VIEW_W, view_y, (185, 185, 210))
+        line_bresenham(scr, view_x + LOBBY_VIEW_W, view_y, view_x + LOBBY_VIEW_W, view_y + LOBBY_VIEW_H, (185, 185, 210))
+        line_bresenham(scr, view_x + LOBBY_VIEW_W, view_y + LOBBY_VIEW_H, view_x, view_y + LOBBY_VIEW_H, (185, 185, 210))
+        line_bresenham(scr, view_x, view_y + LOBBY_VIEW_H, view_x, view_y, (185, 185, 210))
+
+        final_char_x = view_x + (player_bg_x + map_x)
+        final_char_y = view_y + (player_bg_y + map_y)
+
+        anim = self.lobby_last_move if self.lobby_last_move in self.sprites else 'idle'
+        draw_char(scr, self.sprites, anim, int(final_char_x), int(final_char_y))
+
+        overlay = pygame.Surface((W, H), pygame.SRCALPHA)
+        overlay.fill((12, 16, 34, 100))
+        scr.blit(overlay, (0, 0))
+
+        self._txt(self.f_xl, 'LOBBY', W // 2, 40, (245, 245, 255), center=True)
         self._txt(self.f_sm,
-                  '← ↓ ↑ →  acertar notas     ESC  sair     Sprites: pasta sprites/',
-                  W // 2, H - 20, (78, 78, 125), center=True)
+                  'Use WASD / setas para andar e ENTER quando estiver sobre uma fase',
+                  W // 2, 84, (205, 205, 225), center=True)
+
+        anim = self.lobby_last_move if self.lobby_last_move in self.sprites else 'idle'
+        player_rel_x = self.lobby_px - LOBBY_WORLD_XMIN
+        player_rel_y = LOBBY_WORLD_YMAX - self.lobby_py
+
+        # Somando com o offset do mapa na tela para o boneco ficar em cima do cenário correto
+        final_char_x = view_x + map_x + player_rel_x
+        final_char_y = view_y + map_y + player_rel_y
+
+        draw_char(scr, self.sprites, anim, int(final_char_x), int(final_char_y))
+
+        mini_w, mini_h = 220, 140
+        mini_x = W - mini_w - 24
+        mini_y = 120
+        mini_surf = pygame.Surface((mini_w, mini_h))
+        mini_surf.fill((10, 14, 20))
+
+        mini_window = Window(LOBBY_WORLD_XMIN, LOBBY_WORLD_YMIN,
+                             LOBBY_WORLD_XMAX, LOBBY_WORLD_YMAX)
+        mini_viewport = Viewport(0, mini_h, mini_w, 0)
+
+        draw_line_viewport(mini_surf, -360, 0, 360, 0, (70, 70, 110), mini_window, mini_viewport)
+        draw_line_viewport(mini_surf, 0, -260, 0, 260, (70, 70, 110), mini_window, mini_viewport)
+
+        for i, (wx, wy) in enumerate(LOBBY_STAGE_POS):
+            marker = [(wx - 10, wy), (wx, wy + 10), (wx + 10, wy), (wx, wy - 10)]
+            draw_polygon_viewport(mini_surf, marker, LOBBY_STAGE_COLORS[i], mini_window, mini_viewport)
+
+        player_marker = [
+            (self.lobby_px - 8, self.lobby_py),
+            (self.lobby_px, self.lobby_py + 8),
+            (self.lobby_px + 8, self.lobby_py),
+            (self.lobby_px, self.lobby_py - 8),
+        ]
+        draw_polygon_viewport(mini_surf, player_marker, (235, 235, 100), mini_window, mini_viewport)
+
+        for off in range(2):
+            line_bresenham(mini_surf, off, off, mini_w - 1 - off, off, (140, 140, 170))
+            line_bresenham(mini_surf, mini_w - 1 - off, off, mini_w - 1 - off, mini_h - 1 - off, (140, 140, 170))
+            line_bresenham(mini_surf, mini_w - 1 - off, mini_h - 1 - off, off, mini_h - 1 - off, (140, 140, 170))
+            line_bresenham(mini_surf, off, mini_h - 1 - off, off, off, (140, 140, 170))
+
+        scr.blit(mini_surf, (mini_x, mini_y))
+        self._txt(self.f_sm, 'MINI VIEWPORT', mini_x + mini_w // 2, mini_y - 18, (200, 200, 230), center=True)
+
+        if self.lobby_stage_selected is not None:
+            label = LOBBY_STAGE_NAMES[self.lobby_stage_selected]
+            if self.lobby_stage_selected in {0, 1, 2, 3}:
+                self._txt(self.f_md,
+                          f'{label}: escolha a dificuldade para iniciar',
+                          W // 2, H - 80, (240, 220, 140), center=True)
+                for lbl, bx, by, bw, bh, name in self._lobby_difficulty_buttons():
+                    self._draw_btn(scr, bx, by, bw, bh, lbl, self.f_sm,
+                                   active=(name == self.difficulty),
+                                   color=DIFFICULTY_COLORS[name])
+                self._txt(self.f_sm,
+                          'Use ←/→ ou A/D para mudar dificuldade e ENTER para começar',
+                          W // 2, H - 182, (190, 190, 220), center=True)
+            else:
+                msg = 'Digite o caminho para a fase personalizada' if not self.input_text else 'Pressione ENTER para iniciar a fase personalizada'
+                self._txt(self.f_md, msg, W // 2, H - 118, (240, 220, 140), center=True)
+                bx, by, bw, bh = 120, H - 150, W - 240, 48
+                scanline_fill(scr, [(bx,by),(bx+bw,by),(bx+bw,by+bh),(bx,by+bh)], (16, 20, 36))
+                cb = (120, 120, 190)
+                line_bresenham(scr, bx,    by,    bx+bw, by,    cb)
+                line_bresenham(scr, bx+bw, by,    bx+bw, by+bh, cb)
+                line_bresenham(scr, bx+bw, by+bh, bx,    by+bh, cb)
+                line_bresenham(scr, bx,    by+bh, bx,    by,    cb)
+                display = self.input_text[-72:] + ('|' if pygame.time.get_ticks() % 1000 < 500 else '')
+                self._txt(self.f_sm, display, bx + 10, by + 12, (235, 235, 255))
+                self._txt(self.f_sm,
+                          'Digite o caminho da música personalizada e pressione ENTER',
+                          W // 2, by - 24, (210, 210, 230), center=True)
+        elif self.lobby_entered_stage is not None:
+            label = LOBBY_STAGE_NAMES[self.lobby_entered_stage]
+            if self.lobby_entered_stage in {0, 1, 2, 3}:
+                self._txt(self.f_md,
+                          f'Passe sobre {label} e pressione ENTER para ver as dificuldades',
+                          W // 2, H - 80, (240, 220, 140), center=True)
+            else:
+                self._txt(self.f_md,
+                          'Passe pelo centro e pressione ENTER para inserir o caminho personalizado',
+                          W // 2, H - 80, (240, 220, 140), center=True)
+        else:
+            self._txt(self.f_md,
+                      'Aproxime-se de uma fase para ver o botão de entrada',
+                      W // 2, H - 80, (175, 175, 215), center=True)
+
+        if self.lobby_stage_selected == 4:
+            self._txt(self.f_sm,
+                      'ESC = cancelar seleção  |  BACKSPACE apaga o caminho  |  ENTER inicia',
+                      W // 2, H - 24, (180, 180, 210), center=True)
+        elif self.lobby_stage_selected is not None:
+            self._txt(self.f_sm,
+                      'ESC = cancelar seleção  |  ←/→ ou A/D muda dificuldade  |  ENTER inicia',
+                      W // 2, H - 24, (180, 180, 210), center=True)
+        else:
+            self._txt(self.f_sm,
+                      'ESC = menu  |  ENTER entra na fase  |  selecione a dificuldade e aperte enter para jogar',
+                      W // 2, H - 24, (180, 180, 210), center=True)
+
+
+    def _draw_tutorial(self) -> None:
+        scr = self.screen
+        scr.blit(self.menu_art, (0, 0))
+
+        overlay = pygame.Surface((W, H), pygame.SRCALPHA)
+        overlay.fill((8, 12, 28, 220))
+        scr.blit(overlay, (0, 0))
+
+        px, py, pw, ph = 70, 60, W - 140, H - 120
+        scanline_fill(scr, [(px,py),(px+pw,py),(px+pw,py+ph),(px,py+ph)], (15, 18, 40))
+        line_bresenham(scr, px, py, px+pw, py, (130, 110, 220))
+        line_bresenham(scr, px, py+ph, px+pw, py+ph, (130, 110, 220))
+        line_bresenham(scr, px, py, px, py+ph, (130, 110, 220))
+        line_bresenham(scr, px+pw, py, px+pw, py+ph, (130, 110, 220))
+
+        self._txt(self.f_xl, 'TUTORIAL', W // 2, 90, (235, 235, 255), center=True)
+        lines = [
+            'Esta tela inicial usa reta, circunferência, elipse e preenchimento',
+            'com Flood Fill / Boundary Fill para construir a arte de abertura.',
+            '',
+            'JOGAR: leva ao lobby de fases, onde você escolhe o canto ou a fase central.',
+            'TUTORIAL: volta para esta tela de instruções.',
+            'SAIR: fecha o jogo.',
+            '',
+            'Durante o jogo, use as teclas ← ↓ ↑ → para acertar as notas.',
+            'A tela de resultados mostra pontuação, combo e precisão.',
+            '',
+            'Pressione ESC para voltar ao menu principal.',
+        ]
+        for i, line in enumerate(lines):
+            self._txt(self.f_sm, line, W // 2, 150 + i * 32, (200, 200, 230), center=True)
 
 
     def _draw_results(self) -> None:
@@ -506,12 +871,22 @@ class RhythmGame:
             self._res_diff_btns.append((bx2, ry, btn_w, 36, name))
 
         self._txt(self.f_sm,
-                  'ENTER: repetir mesmo nível     ESC: menu     Q: sair',
+                  '←/→ ou A/D muda dificuldade   ENTER: repetir mesmo nível   ESC: menu   Q: sair',
                   W // 2, py + ph - 22, (110, 110, 175), center=True)
 
 
-    def _try_start(self) -> None:
+    def _try_start(self, stage_idx: int = 0, difficulty: str | None = None) -> None:
+        self.stage_idx = stage_idx if stage_idx is not None else 0
+        if difficulty is not None:
+            self.difficulty = difficulty
         path = self.input_text.strip().strip('"\'')
+        if self.stage_idx in {0, 1, 2, 3}:
+            self.menu_error = ''
+            self.load_song(self._default_stage_music_path(), stage_idx=stage_idx)
+            return
+        if not path:
+            self.menu_error = 'Digite o caminho para a fase personalizada.'
+            return
         if not os.path.exists(path):
             self.menu_error = f'Arquivo não encontrado: {path[:55]}'
             return
@@ -520,7 +895,7 @@ class RhythmGame:
             self.menu_error = 'Formato inválido. Use .mp3, .ogg, .wav ou .flac'
             return
         self.menu_error = ''
-        self.load_song(path)
+        self.load_song(path, stage_idx=stage_idx)
 
     def run(self) -> None:
         running = True
@@ -535,24 +910,47 @@ class RhythmGame:
             if self.state == 'menu':
                 for ev in events:
                     if ev.type == pygame.KEYDOWN:
-                        k = ev.key
-                        if   k == pygame.K_ESCAPE:    running = False
-                        elif k == pygame.K_RETURN:    self._try_start()
-                        elif k == pygame.K_BACKSPACE: self.input_text = self.input_text[:-1]
-                        else:                         self.input_text += ev.unicode
+                        if ev.key == pygame.K_ESCAPE:
+                            running = False
+                        elif ev.key in {pygame.K_UP, pygame.K_w}:
+                            self.menu_selection = (self.menu_selection - 1) % len(self._menu_buttons)
+                        elif ev.key in {pygame.K_DOWN, pygame.K_s}:
+                            self.menu_selection = (self.menu_selection + 1) % len(self._menu_buttons)
+                        elif ev.key == pygame.K_RETURN:
+                            _, _, _, _, action = list(self._menu_buttons)[self.menu_selection]
+                            if action == 'play':
+                                self.state = 'lobby'
+                            elif action == 'tutorial':
+                                self.state = 'tutorial'
+                            elif action == 'exit':
+                                self._exit_requested = True
                     elif ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 1:
                         mx, my = ev.pos
-                        for dbx, dby, dbw, dbh, dname in getattr(self, '_diff_btns', []):
-                            if dbx <= mx <= dbx+dbw and dby <= my <= dby+dbh:
-                                self.difficulty = dname
-                                self.menu_error = ''
-                        bx2 = getattr(self, '_btnx', W//2-130)
-                        by2 = getattr(self, '_btny', 340)
-                        bw2 = getattr(self, '_btnw', 260)
-                        bh2 = getattr(self, '_btnh', 52)
-                        if bx2 <= mx <= bx2+bw2 and by2 <= my <= by2+bh2:
-                            self._try_start()
+                        for idx, (bx2, by2, bw2, bh2, action) in enumerate(getattr(self, '_menu_buttons', [])):
+                            if bx2 <= mx <= bx2+bw2 and by2 <= my <= by2+bh2:
+                                self.menu_selection = idx
+                                if action == 'play':
+                                    self.state = 'lobby'
+                                elif action == 'tutorial':
+                                    self.state = 'tutorial'
+                                elif action == 'exit':
+                                    self._exit_requested = True
+                        if self._exit_requested:
+                            running = False
                 self._draw_menu()
+
+            elif self.state == 'lobby':
+                self._update_lobby(events, dt)
+                self._draw_lobby()
+
+            elif self.state == 'tutorial':
+                for ev in events:
+                    if ev.type == pygame.KEYDOWN:
+                        if ev.key == pygame.K_ESCAPE:
+                            self.state = 'menu'
+                    elif ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 1:
+                        self.state = 'menu'
+                self._draw_tutorial()
 
             elif self.state == 'playing':
                 for ev in events:
@@ -571,9 +969,16 @@ class RhythmGame:
                     if ev.type == pygame.KEYDOWN:
                         k = ev.key
                         if k == pygame.K_ESCAPE:
-                            self.state = 'menu'
+                            self.state = 'lobby'
                         elif k == pygame.K_RETURN and self.music_path:
                             self.load_song(self.music_path, reuse_raw=True)
+                        elif k in {pygame.K_LEFT, pygame.K_a, pygame.K_RIGHT, pygame.K_d}:
+                            idx = DIFFICULTY_NAMES.index(self.difficulty)
+                            if k in {pygame.K_LEFT, pygame.K_a}:
+                                idx = (idx - 1) % len(DIFFICULTY_NAMES)
+                            else:
+                                idx = (idx + 1) % len(DIFFICULTY_NAMES)
+                            self.difficulty = DIFFICULTY_NAMES[idx]
                         elif k == pygame.K_q:
                             running = False
                     elif ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 1:
@@ -581,9 +986,10 @@ class RhythmGame:
                         for bx2, by2, bw2, bh2, dname in getattr(self, '_res_diff_btns', []):
                             if bx2 <= mx <= bx2+bw2 and by2 <= my <= by2+bh2:
                                 self.difficulty = dname
-                                if self.music_path:
-                                    self.load_song(self.music_path, reuse_raw=True)
                 self._draw_results()
+
+            if self._exit_requested:
+                running = False
 
             pygame.display.flip()
 
