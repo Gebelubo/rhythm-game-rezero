@@ -4,7 +4,7 @@ import sys
 import math
 
 LOBBY_STAGE_NAMES = [
-    'Floresta', 'Cidade', 'Templo', 'Vórtex', 'Personalizada'
+    'Refazer', 'Entender', 'Reconstruir', 'Lembrar', 'Personalizada'
 ]
 
 LOBBY_STAGE_COLORS = [
@@ -24,10 +24,10 @@ LOBBY_VIEW_W = 620
 LOBBY_VIEW_H = 420
 
 LOBBY_STAGE_POS = [
-    (-500, 350),  # Floresta (Superior Esquerda)
-    (500, 350),   # Cidade (Superior Direita)
-    (-500, -350), # Templo (Inferior Esquerda)
-    (500, -350),  # Vórtex (Inferior Direita)
+    (-500, 350),  # Refazer (Superior Esquerda)
+    (500, 350),   # Entender (Superior Direita)
+    (-500, -350), # Reconstruir (Inferior Esquerda)
+    (500, -350),  # Lembrar (Inferior Direita)
     (0, 0),       # Personalizada (Centro)
 ]
 
@@ -555,6 +555,7 @@ class RhythmGame:
         return (int(wx - LOBBY_WORLD_XMIN), int(LOBBY_WORLD_YMAX - wy))
 
     def _build_lobby_background(self) -> pygame.Surface:
+        STAGE_SYMBOLS = ['★', '♦', '✦', '❋', '♪']
         width = LOBBY_WORLD_XMAX - LOBBY_WORLD_XMIN
         height = LOBBY_WORLD_YMAX - LOBBY_WORLD_YMIN
         surf = pygame.Surface((width, height))
@@ -570,16 +571,35 @@ class RhythmGame:
         for i, (wx, wy) in enumerate(LOBBY_STAGE_POS):
             sx, sy = self._world_to_bg(wx, wy)
             radius = 60 if i < 4 else 88
-            circle_midpoint(surf, sx, sy, radius, LOBBY_STAGE_COLORS[i])
-            flood_fill(surf, sx, sy, tuple(min(255, c + 30) for c in LOBBY_STAGE_COLORS[i]))
-            poly = [
-                self._world_to_bg(wx + radius * math.cos(a), wy + radius * math.sin(a))
-                for a in [k * math.pi / 3 for k in range(6)]
-            ]
-            draw_polygon(surf, poly, (255, 255, 255))
-            label = self.f_md.render(LOBBY_STAGE_NAMES[i], True, (235, 235, 235))
-            surf.blit(label, (sx - label.get_width() // 2, sy - radius - 24))
+            color  = LOBBY_STAGE_COLORS[i]
+            dim    = tuple(max(0, c - 50) for c in color)
+            bright = tuple(min(255, c + 80) for c in color)
 
+            # Sombra levemente deslocada
+            for dy in range(-radius + 2, radius):
+                dx = int(math.sqrt(max(0, (radius - 2) * (radius - 2) - dy * dy)))
+                pygame.draw.line(surf, (10, 12, 22), (sx - dx + 4, sy + dy + 4), (sx + dx + 4, sy + dy + 4))
+            # Círculo preenchido
+            for dy in range(-radius, radius + 1):
+                dx = int(math.sqrt(max(0, radius * radius - dy * dy)))
+                t  = abs(dy) / radius
+                shade = tuple(int(dim[c] + (color[c] - dim[c]) * (1 - t * 0.4)) for c in range(3))
+                pygame.draw.line(surf, shade, (sx - dx, sy + dy), (sx + dx, sy + dy))
+            
+            # Anel externo
+            circle_midpoint(surf, sx, sy, radius,     tuple(min(255, c + 40) for c in color))
+            circle_midpoint(surf, sx, sy, radius - 1, tuple(min(255, c + 20) for c in color))
+
+            # Linha decorativa interna
+            circle_midpoint(surf, sx, sy, radius - 8, tuple(max(0, c - 20) for c in color))
+
+            # Nome acima
+            label = self.f_md.render(LOBBY_STAGE_NAMES[i], True, (235, 235, 235))
+            surf.blit(label, (sx - label.get_width() // 2, sy - radius - 22))
+
+            # Símbolo dentro
+            symbol = self.f_lg.render(STAGE_SYMBOLS[i], True, bright)
+            surf.blit(symbol, (sx - symbol.get_width() // 2, sy - symbol.get_height() // 2))
         return surf
 
     def _lobby_difficulty_buttons(self):
@@ -641,8 +661,6 @@ class RhythmGame:
                 elif ev.key == pygame.K_RETURN:
                     if self.lobby_stage_selected is None and self.lobby_entered_stage is not None:
                         self.lobby_stage_selected = self.lobby_entered_stage
-                        if self.lobby_stage_selected == 4:
-                            self.input_text = ''
                     elif self.lobby_stage_selected == 4:
                         self._try_start(stage_idx=4)
                     elif self.lobby_stage_selected in {0, 1, 2, 3}:
@@ -657,6 +675,13 @@ class RhythmGame:
                 elif self.lobby_stage_selected == 4:
                     if ev.key == pygame.K_BACKSPACE:
                         self.input_text = self.input_text[:-1]
+                    elif ev.key in {pygame.K_LEFT, pygame.K_RIGHT}:
+                        idx = DIFFICULTY_NAMES.index(self.difficulty)
+                        if ev.key == pygame.K_LEFT:
+                            idx = (idx - 1) % len(DIFFICULTY_NAMES)
+                        else:
+                            idx = (idx + 1) % len(DIFFICULTY_NAMES)
+                        self.difficulty = DIFFICULTY_NAMES[idx]
                     elif ev.unicode:
                         self.input_text += ev.unicode
             elif ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 1:
@@ -768,9 +793,17 @@ class RhythmGame:
                           'Use ←/→ ou A/D para mudar dificuldade e ENTER para começar',
                           W // 2, H - 182, (190, 190, 220), center=True)
             else:
-                msg = 'Digite o caminho para a fase personalizada' if not self.input_text else 'Pressione ENTER para iniciar a fase personalizada'
-                self._txt(self.f_md, msg, W // 2, H - 118, (240, 220, 140), center=True)
-                bx, by, bw, bh = 120, H - 150, W - 240, 48
+                self._txt(self.f_sm,
+                          'Use ← → para mudar dificuldade',
+                          W // 2, H - 220, (190, 190, 220), center=True)
+                for lbl, bx, by, bw, bh, name in self._lobby_difficulty_buttons():
+                     self._draw_btn(scr, bx, by, bw, bh, lbl, self.f_sm,
+                                    active=(name == self.difficulty),
+                                    color=DIFFICULTY_COLORS[name])
+                msg = 'Digite o nome do arquivo em musics/ (ex: minha.mp3)' if not self.input_text else 'Pressione ENTER para iniciar a fase personalizada'
+                self._txt(self.f_md, msg, W // 2, H - 102, (240, 220, 140), center=True)
+               
+                bx, by, bw, bh = 120, H - 90, W - 240, 48
                 scanline_fill(scr, [(bx,by),(bx+bw,by),(bx+bw,by+bh),(bx,by+bh)], (16, 20, 36))
                 cb = (120, 120, 190)
                 line_bresenham(scr, bx,    by,    bx+bw, by,    cb)
@@ -779,9 +812,6 @@ class RhythmGame:
                 line_bresenham(scr, bx,    by+bh, bx,    by,    cb)
                 display = self.input_text[-72:] + ('|' if pygame.time.get_ticks() % 1000 < 500 else '')
                 self._txt(self.f_sm, display, bx + 10, by + 12, (235, 235, 255))
-                self._txt(self.f_sm,
-                          'Digite o caminho da música personalizada e pressione ENTER',
-                          W // 2, by - 24, (210, 210, 230), center=True)
         elif self.lobby_entered_stage is not None:
             label = LOBBY_STAGE_NAMES[self.lobby_entered_stage]
             if self.lobby_entered_stage in {0, 1, 2, 3}:
@@ -790,7 +820,7 @@ class RhythmGame:
                           W // 2, H - 80, (240, 220, 140), center=True)
             else:
                 self._txt(self.f_md,
-                          'Passe pelo centro e pressione ENTER para inserir o caminho personalizado',
+                          'Passe pelo centro e pressione ENTER para inserir o nome personalizado',
                           W // 2, H - 80, (240, 220, 140), center=True)
         else:
             self._txt(self.f_md,
@@ -819,29 +849,77 @@ class RhythmGame:
         overlay.fill((8, 12, 28, 220))
         scr.blit(overlay, (0, 0))
 
-        px, py, pw, ph = 70, 60, W - 140, H - 120
-        scanline_fill(scr, [(px,py),(px+pw,py),(px+pw,py+ph),(px,py+ph)], (15, 18, 40))
-        line_bresenham(scr, px, py, px+pw, py, (130, 110, 220))
-        line_bresenham(scr, px, py+ph, px+pw, py+ph, (130, 110, 220))
-        line_bresenham(scr, px, py, px, py+ph, (130, 110, 220))
-        line_bresenham(scr, px+pw, py, px+pw, py+ph, (130, 110, 220))
+        px, py, pw, ph = 60, 40, W - 120, H - 80
+        scanline_fill(scr, [(px,py),(px+pw,py),(px+pw,py+ph),(px,py+ph)], (12, 15, 35))
+        bc = (130, 110, 220)
+        line_bresenham(scr, px, py, px+pw, py, bc)
+        line_bresenham(scr, px, py+ph, px+pw, py+ph, bc)
+        line_bresenham(scr, px, py, px, py+ph, bc)
+        line_bresenham(scr, px+pw, py, px+pw, py+ph, bc)
 
-        self._txt(self.f_xl, 'TUTORIAL', W // 2, 90, (235, 235, 255), center=True)
-        lines = [
-            'Esta tela inicial usa reta, circunferência, elipse e preenchimento',
-            'com Flood Fill / Boundary Fill para construir a arte de abertura.',
-            '',
-            'JOGAR: leva ao lobby de fases, onde você escolhe o canto ou a fase central.',
-            'TUTORIAL: volta para esta tela de instruções.',
-            'SAIR: fecha o jogo.',
-            '',
-            'Durante o jogo, use as teclas ← ↓ ↑ → para acertar as notas.',
-            'A tela de resultados mostra pontuação, combo e precisão.',
-            '',
-            'Pressione ESC para voltar ao menu principal.',
+        self._txt(self.f_xl, 'Re:Song  —  Como Jogar', W // 2, py + 30, (235, 235, 255), center=True)
+        self._txt(self.f_sm, 'Um jogo de ritmo ambientado no universo de Re:Zero', W // 2, py + 62, (160, 150, 200), center=True)
+
+        line_bresenham(scr, px + 20, py + 80, px + pw - 20, py + 80, (50, 45, 90))
+
+        col1 = [
+            ('NAVEGAÇÃO', ''),
+            ('JOGAR',   'Abre o lobby'),
+            ('WASD/SETAS',    'Anda pelo lobby'),
+            ('ENTER',   'Entra na fase'),
+            ('Centro',  'Fase personalizada'),
         ]
-        for i, line in enumerate(lines):
-            self._txt(self.f_sm, line, W // 2, 150 + i * 32, (200, 200, 230), center=True)
+        col2 = [
+            ('NO JOGO', ''),
+            ('← ↓ ↑ →', 'Acerta as notas'),
+            ('ESC',      'Volta ao lobby'),
+            ('Combo',    'Bonus a cada 10'),
+            ('Miss',     'Zera o combo'),
+        ]
+
+        c1x = px + 30
+        c2x = px + 160
+        c3x = px + pw // 2
+        c4x = px + pw // 2 + 130
+
+        for i, ((k1, d1), (k2, d2)) in enumerate(zip(col1, col2)):
+            iy = py + 100 + i * 34
+            color_k = (180, 150, 255) if i == 0 else (220, 210, 255)
+            color_d = (140, 135, 175)
+            self._txt(self.f_md if i == 0 else self.f_sm, k1, c1x, iy, color_k)
+            self._txt(self.f_md if i == 0 else self.f_sm, k2, c3x, iy, color_k)
+            if d1: self._txt(self.f_sm, d1, c2x, iy, color_d)
+            if d2: self._txt(self.f_sm, d2, c4x, iy, color_d)
+
+        line_bresenham(scr, px + 20, py + 268, px + pw - 20, py + 268, (50, 45, 90))
+
+        self._txt(self.f_md, 'JULGAMENTOS', px + 30, py + 278, (180, 150, 255))
+        grades = [
+            ('PERFECT', '300 pts', (255, 220, 50)),
+            ('GOOD',    '150 pts', ( 80, 220, 80)),
+            ('OK',      ' 55 pts', ( 80, 170, 255)),
+            ('MISS',    '  0 pts', (255,  70, 70)),
+        ]
+        gw = (pw - 60) // 4
+        for i, (name, pts, color) in enumerate(grades):
+            gx = px + 30 + i * (gw + 8)
+            gy = py + 308
+            scanline_fill(scr, [(gx,gy),(gx+gw,gy),(gx+gw,gy+48),(gx,gy+48)],
+                        tuple(v // 5 for v in color))
+            line_bresenham(scr, gx, gy, gx+gw, gy, tuple(v // 2 for v in color))
+            line_bresenham(scr, gx, gy+48, gx+gw, gy+48, tuple(v // 2 for v in color))
+            line_bresenham(scr, gx, gy, gx, gy+48, tuple(v // 2 for v in color))
+            line_bresenham(scr, gx+gw, gy, gx+gw, gy+48, tuple(v // 2 for v in color))
+            self._txt(self.f_sm, name, gx + gw // 2, gy + 10, color, center=True)
+            self._txt(self.f_sm, pts,  gx + gw // 2, gy + 28, tuple(v // 2 + 80 for v in color), center=True)
+
+        line_bresenham(scr, px + 20, py + 372, px + pw - 20, py + 372, (50, 45, 90))
+
+        quote = '"Mesmo que esqueça tudo, eu não vou me esquecer de nenhum vocês"'
+        self._txt(self.f_sm, quote, W // 2, py + 390, (120, 110, 160), center=True)
+
+        self._txt(self.f_sm, 'ESC = voltar ao menu  |  clique para voltar',
+                W // 2, py + ph - 18, (90, 85, 130), center=True)
 
 
     def _draw_results(self) -> None:
@@ -912,22 +990,39 @@ class RhythmGame:
         if difficulty is not None:
             self.difficulty = difficulty
         path = self.input_text.strip().strip('"\'')
+
+        STAGE_MUSIC_PATHS = [
+            'musics/refazer.mp3',
+            'musics/entender.mp3',
+            'musics/reconstruir.mp3',
+            'musics/lembrar.mp3',
+        ]
+
         if self.stage_idx in {0, 1, 2, 3}:
+            music_path = os.path.abspath(
+                os.path.join(os.path.dirname(__file__), '..', STAGE_MUSIC_PATHS[self.stage_idx])
+            )
+            if not os.path.exists(music_path):
+                self.menu_error = f'Música não encontrada: {STAGE_MUSIC_PATHS[self.stage_idx]}'
+                return
             self.menu_error = ''
-            self.load_song(self._default_stage_music_path(), stage_idx=stage_idx)
+            self.load_song(music_path, stage_idx=stage_idx)
             return
         if not path:
-            self.menu_error = 'Digite o caminho para a fase personalizada.'
+            self.menu_error = 'Digite o nome da música personalizada.'
             return
-        if not os.path.exists(path):
-            self.menu_error = f'Arquivo não encontrado: {path[:55]}'
+        music_path = os.path.abspath(
+            os.path.join(os.path.dirname(__file__), '..', 'musics', path)
+        )
+        if not os.path.exists(music_path):
+            self.menu_error = f'Não encontrado em musics/: {path[:55]}'
             return
         ext = os.path.splitext(path)[1].lower()
         if ext not in {'.mp3', '.ogg', '.wav', '.flac', '.m4a', '.opus'}:
             self.menu_error = 'Formato inválido. Use .mp3, .ogg, .wav ou .flac'
             return
         self.menu_error = ''
-        self.load_song(path, stage_idx=stage_idx)
+        self.load_song(music_path, stage_idx=4)
 
     def run(self) -> None:
         running = True
@@ -966,6 +1061,7 @@ class RhythmGame:
                             _, _, _, _, action = list(self._menu_buttons)[self.menu_selection]
                             if action == 'play':
                                 pygame.mixer.music.stop()
+                                self.music_started = True
                                 self.state = 'lobby'
                             elif action == 'tutorial':
                                 self.state = 'tutorial'
@@ -977,6 +1073,7 @@ class RhythmGame:
                             if bx2 <= mx <= bx2+bw2 and by2 <= my <= by2+bh2:
                                 self.menu_selection = idx
                                 if action == 'play':
+                                    self.music_started = True
                                     self.state = 'lobby'
                                 elif action == 'tutorial':
                                     self.state = 'tutorial'

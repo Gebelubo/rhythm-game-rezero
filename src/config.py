@@ -9,7 +9,7 @@ TARGET_Y        = 555
 SPAWN_OFFSET    = 690
 FALL_TIME       = 1.90
 
-CHAR_SIZE       = 100
+CHAR_SIZE       = 180
 
 DIRECTIONS      = ['left', 'down', 'up', 'right']
 KEY_MAP = {
