@@ -2,6 +2,9 @@ from src.lib.cg_lib import (
     scanline_fill,
     draw_polygon,
     line_bresenham,
+    rotate,
+    load_texture,
+    texture_map_triangle,
 )
 from src.config import (
     W, H, HUD_H,
@@ -10,30 +13,84 @@ from src.config import (
     DIRECTIONS, LANE_COLORS,
 )
 
+import os
 import pygame
 
+_texture_cache = {}
 
-def arrow_poly(direction: str, cx: float, cy: float, size: int) -> list:
+def _get_texture(size: int):
+    if size in _texture_cache:
+        return _texture_cache[size]
+    path = os.path.join('texture', 'texture_nota.png')
+    if os.path.exists(path):
+        try:
+            tex = load_texture(path)
+            tex = pygame.transform.smoothscale(tex, (size * 2, size * 2))
+            _texture_cache[size] = tex
+            return tex
+        except Exception:
+            pass
+    _texture_cache[size] = None
+    return None
+
+
+DIRECTION_ANGLES = {
+    'up':    0,
+    'down':  180,
+    'left':  270,
+    'right': 90,
+}
+
+
+def arrow_poly(cx: float, cy: float, size: int) -> list:
+    """Forma base apontando para cima. Rotacione externamente para outras direções."""
     h  = size * 0.52
     sw = size * 0.24
-    if direction == 'up':
-        return [(cx,cy-h),(cx+h,cy),(cx+sw,cy),(cx+sw,cy+h),(cx-sw,cy+h),(cx-sw,cy),(cx-h,cy)]
-    if direction == 'down':
-        return [(cx,cy+h),(cx+h,cy),(cx+sw,cy),(cx+sw,cy-h),(cx-sw,cy-h),(cx-sw,cy),(cx-h,cy)]
-    if direction == 'left':
-        return [(cx-h,cy),(cx,cy-h),(cx,cy-sw),(cx+h,cy-sw),(cx+h,cy+sw),(cx,cy+sw),(cx,cy+h)]
-    return [(cx+h,cy),(cx,cy-h),(cx,cy-sw),(cx-h,cy-sw),(cx-h,cy+sw),(cx,cy+sw),(cx,cy+h)]
+    return [
+        (cx,      cy - h),
+        (cx + h,  cy),
+        (cx + sw, cy),
+        (cx + sw, cy + h),
+        (cx - sw, cy + h),
+        (cx - sw, cy),
+        (cx - h,  cy),
+    ]
 
 
 def bake_arrow_surf(direction: str, fill_color: tuple,
-                    border_color: tuple, size: int) -> pygame.Surface:
+                    border_color: tuple, size: int,
+                    rotation: float = 0.0) -> pygame.Surface:
 
     pad  = 6
     dim  = size * 2 + pad * 2
     surf = pygame.Surface((dim, dim), pygame.SRCALPHA)
     cx   = cy = dim // 2
-    verts = arrow_poly(direction, cx, cy, size)
-    scanline_fill(surf, verts, fill_color)
+
+    # Soma o ângulo da direção com a rotação extra
+    total_angle = DIRECTION_ANGLES.get(direction, 0) + rotation
+
+    verts = arrow_poly(cx, cy, size)
+
+    if total_angle != 0.0:
+        verts = rotate(verts, total_angle, cx, cy)
+
+    tex = _get_texture(size)
+    if tex is not None:
+        v0 = verts[0]
+        for i in range(1, len(verts) - 1):
+            p0 = (int(v0[0]),         int(v0[1]))
+            p1 = (int(verts[i][0]),   int(verts[i][1]))
+            p2 = (int(verts[i+1][0]), int(verts[i+1][1]))
+            uv0 = (p0[0] / dim, p0[1] / dim)
+            uv1 = (p1[0] / dim, p1[1] / dim)
+            uv2 = (p2[0] / dim, p2[1] / dim)
+            texture_map_triangle(surf, tex, p0, p1, p2, uv0, uv1, uv2)
+        color_overlay = pygame.Surface((dim, dim), pygame.SRCALPHA)
+        scanline_fill(color_overlay, verts, (*fill_color, 140))
+        surf.blit(color_overlay, (0, 0))
+    else:
+        scanline_fill(surf, verts, fill_color)
+
     draw_polygon(surf, verts, border_color)
     return surf
 

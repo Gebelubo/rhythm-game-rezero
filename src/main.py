@@ -59,6 +59,8 @@ from src.lib.cg_lib import (
     ellipse_midpoint, flood_fill, line_bresenham, scanline_fill, set_pixel
 )
 
+from src.utils.render import bake_static_bg, bake_arrow_surf, DIRECTION_ANGLES
+
 class RhythmGame:
 
     def __init__(self):
@@ -79,7 +81,7 @@ class RhythmGame:
         self.lane_xs   = [self.lane_left + i * LANE_W + LANE_W // 2
                           for i in range(LANE_COUNT)]
 
-        self.char_cx = self.lane_left + total_lane_w + 95
+        self.char_cx = self.lane_left + total_lane_w + 130
         self.char_cy = TARGET_Y - 20
 
         self.bg_surf   = bake_static_bg(self.lane_left)
@@ -141,8 +143,17 @@ class RhythmGame:
         self.fb_timer   = 0.0
         self.fb_color   = (255, 255, 255)
 
-        self.char_anim  = 'idle'
+        self.char_anim  = 'game_idle'
         self.char_timer = 0.0
+        self.char_frame     = 0
+        self.char_frame_t   = 0.0
+        self.char_frame_spd = {
+            'idle':  0.12,
+            'left':  0.12,
+            'right': 0.30,
+            'up':    0.12,
+            'down':  0.12,
+        }
         self.lane_flash = {d: 0.0 for d in DIRECTIONS}
 
         self.intensity_map: list = []
@@ -286,7 +297,7 @@ class RhythmGame:
         self.fb_timer  = 0.55
         self.fb_color  = col
 
-        self.char_anim  = direction
+        self.char_anim  = f'game_{direction}'
         self.char_timer = 0.30
         self.lane_flash[direction] = 0.22
 
@@ -303,17 +314,24 @@ class RhythmGame:
                     self.fb_text  = 'MISS'
                     self.fb_timer = 0.38
                     self.fb_color = (255, 55, 55)
+                    self.char_anim  = 'game_miss'
+                    self.char_timer = 0.38
 
         self.fb_timer   = max(0.0, self.fb_timer   - dt)
         self.char_timer = max(0.0, self.char_timer - dt)
         if self.char_timer <= 0:
-            self.char_anim = 'idle'
+            self.char_anim = 'game_idle'
         for d in DIRECTIONS:
             self.lane_flash[d] = max(0.0, self.lane_flash[d] - dt)
 
         if not pygame.mixer.music.get_busy():
             self.state = 'results'
 
+        self.char_frame_t += dt
+        frames = self.sprites.get(self.char_anim, [None])
+        if self.char_frame_t >= self.char_frame_spd.get(self.char_anim, 0.12):
+            self.char_frame_t = 0.0
+            self.char_frame = (self.char_frame + 1) % max(1, len(frames))
 
     def _txt(self, font, text, x, y, color=(255,255,255), center=False):
         """Renderiza texto com a fonte pygame e blit (como Button da lib)."""
@@ -441,7 +459,7 @@ class RhythmGame:
             lane_cx = self.lane_left + (LANE_W * LANE_COUNT) // 2
             self._txt(self.f_lg, self.fb_text, lane_cx, TARGET_Y - 95, fc, center=True)
 
-        draw_char(scr, self.sprites, self.char_anim, self.char_cx, self.char_cy)
+        draw_char(scr, self.sprites, self.char_anim, self.char_cx, self.char_cy, self.char_frame)
 
         hint = '  ←  ↓  ↑  →      ESC: menu'
         self._txt(self.f_sm, hint, self.lane_left, H - 22, (70, 70, 110))
@@ -635,6 +653,7 @@ class RhythmGame:
                 self.lobby_last_move = 'up' if move_y > 0 else 'down'
         else:
             self.lobby_anim_t = 0.0
+            self.lobby_last_move = 'idle'
 
         self._clamp_lobby_player()
 
@@ -691,6 +710,12 @@ class RhythmGame:
                         if bx <= mx <= bx + bw and by <= my <= by + bh:
                             self._try_start(stage_idx=self.lobby_stage_selected, difficulty=name)
                             break
+        self.char_frame_t += dt
+        frames = self.sprites.get(self.lobby_last_move if self.lobby_last_move in self.sprites else 'idle', [None])
+        anim_key = self.lobby_last_move if self.lobby_last_move in self.sprites else 'idle'
+        if self.char_frame_t >= self.char_frame_spd.get(anim_key, 0.12):
+            self.char_frame_t = 0.0
+            self.char_frame = (self.char_frame + 1) % max(1, len(frames))
 
     def _draw_lobby(self) -> None:
         scr = self.screen
@@ -724,7 +749,7 @@ class RhythmGame:
         final_char_y = view_y + (player_bg_y + map_y)
 
         anim = self.lobby_last_move if self.lobby_last_move in self.sprites else 'idle'
-        draw_char(scr, self.sprites, anim, int(final_char_x), int(final_char_y))
+        draw_char(scr, self.sprites, anim, int(final_char_x), int(final_char_y), self.char_frame)
 
         overlay = pygame.Surface((W, H), pygame.SRCALPHA)
         overlay.fill((12, 16, 34, 100))
@@ -743,7 +768,7 @@ class RhythmGame:
         final_char_x = view_x + map_x + player_rel_x
         final_char_y = view_y + map_y + player_rel_y
 
-        draw_char(scr, self.sprites, anim, int(final_char_x), int(final_char_y))
+        draw_char(scr, self.sprites, anim, int(final_char_x), int(final_char_y), self.char_frame)
 
         mini_w, mini_h = 220, 140
         mini_x = W - mini_w - 24
