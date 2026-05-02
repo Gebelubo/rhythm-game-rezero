@@ -62,7 +62,7 @@ def load_sprites(folder: str = 'sprites', size: int = CHAR_SIZE) -> dict:
 
 
 def draw_char(surface: pygame.Surface, sprites: dict,
-              anim: str, cx: int, cy: int, frame: int = 0) -> None:
+              anim: str, cx: int, cy: int, frame: int = 0, size: int = CHAR_SIZE) -> None:
 
     frames = sprites.get(anim)
     if not frames:
@@ -71,10 +71,10 @@ def draw_char(surface: pygame.Surface, sprites: dict,
     if frames:
         s = frames[frame % len(frames)]
         if s:
-            surface.blit(s, (cx - CHAR_SIZE // 2, cy - CHAR_SIZE // 2))
+            surface.blit(s, (cx - size // 2, cy - size // 2))
             return
 
-    r  = CHAR_SIZE // 2
+    r  = size // 2
     c  = LANE_COLORS.get(anim, (160, 160, 220))
     bg = (40, 40, 72)
 

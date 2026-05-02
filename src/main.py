@@ -60,7 +60,7 @@ LOBBY_ENTRY_RADIUS = 64
 
 from src.config import (
     W, H, LANE_W, LANE_COUNT, TARGET_Y, SPAWN_OFFSET, FALL_TIME,
-    CHAR_SIZE, DIRECTIONS, LANE_COLORS, LANE_DIM, NOTE_SIZE, WIN_GOOD, WIN_OK, WIN_PERFECT, HUD_H, KEY_MAP
+    CHAR_SIZE, CHAR_SIZE_LOBBY, DIRECTIONS, LANE_COLORS, LANE_DIM, NOTE_SIZE, WIN_GOOD, WIN_OK, WIN_PERFECT, HUD_H, KEY_MAP
 )
 from src.music_backend.note import Note
 from src.music_backend.difficulty import apply_difficulty
@@ -184,7 +184,7 @@ class RhythmGame:
         self.lane_xs   = [self.lane_left + i * LANE_W + LANE_W // 2
                           for i in range(LANE_COUNT)]
 
-        self.char_cx = self.lane_left + total_lane_w + 130
+        self.char_cx = self.lane_left + total_lane_w + 150
         self.char_cy = TARGET_Y - 20
 
         self.bg_surf   = bake_static_bg(self.lane_left)
@@ -206,7 +206,8 @@ class RhythmGame:
             fs.fill(LANE_COLORS[d])
             self._flash_surfs[d] = fs
 
-        self.sprites = load_sprites()
+        self.sprites = load_sprites('sprites', size=CHAR_SIZE)
+        self.sprites_lobby = load_sprites('sprites', size=CHAR_SIZE_LOBBY)
 
         self.menu_bg_image = self._load_menu_bg_image()
         self.menu_art = self._build_menu_art()
@@ -676,7 +677,6 @@ class RhythmGame:
         return (int(wx - LOBBY_WORLD_XMIN), int(LOBBY_WORLD_YMAX - wy))
 
     def _build_lobby_background(self) -> pygame.Surface:
-        STAGE_SYMBOLS = ['★', '♦', '✦', '❋', '♪']
         width  = LOBBY_WORLD_XMAX - LOBBY_WORLD_XMIN
         height = LOBBY_WORLD_YMAX - LOBBY_WORLD_YMIN
         surf   = pygame.Surface((width, height))
@@ -684,11 +684,6 @@ class RhythmGame:
 
         _pixel_grass(surf, 0, 0, width, height, rng)
 
-        path_w = 40
-        cx_path_y = height // 2 - path_w // 2
-        _pixel_path(surf, 0, cx_path_y, width, path_w, rng)
-        cx_path_x = width // 2 - path_w // 2
-        _pixel_path(surf, cx_path_x, 0, path_w, height, rng)
         center_bg = self._world_to_bg(0, 0)
         for i in range(4):
             sx, sy = self._world_to_bg(*LOBBY_STAGE_POS[i])
@@ -701,13 +696,7 @@ class RhythmGame:
                 px = int(sx + dx * t)
                 py = int(sy + dy * t)
                 _pixel_path(surf, px - 14, py - 14, 28, 28, rng)
-        border_c = (42, 95, 42)
-        for x in range(0, width, 4):
-            for off in [cx_path_y - 2, cx_path_y + path_w]:
-                _fill_rect(surf, x, off, 4, 2, border_c)
-        for y in range(0, height, 4):
-            for off in [cx_path_x - 2, cx_path_x + path_w]:
-                _fill_rect(surf, off, y, 2, 4, border_c)
+      
         bush_positions = [
             (180,180),(1420,180),(180,1020),(1420,1020),
             (500,300),(1100,300),(500,900),(1100,900),
@@ -716,6 +705,7 @@ class RhythmGame:
             (200,480),(200,720),(1400,480),(1400,720),
         ]
 
+        path_w = 40
         for bx, by in bush_positions:
             _draw_bush(surf, bx, by, rng.randint(4, 7), rng)
 
@@ -768,11 +758,28 @@ class RhythmGame:
                 ey = int(sy + (radius-4)*math.sin(rad))
                 _px(surf, ex, ey, bright)
             
-            label  = self.f_md.render(LOBBY_STAGE_NAMES[i], True, (235,235,235))
-            surf.blit(label, (sx - label.get_width()//2, sy - radius - 22))
-            symbol = self.f_lg.render(STAGE_SYMBOLS[i], True, bright)
-            surf.blit(symbol, (sx - symbol.get_width()//2, sy - symbol.get_height()//2))
-        
+            # Badge com nome embaixo do círculo
+            name_surf = self.f_sm.render(LOBBY_STAGE_NAMES[i], True, (235, 235, 235))
+            badge_w = name_surf.get_width() + 16
+            badge_h = name_surf.get_height() + 8
+            badge_x = sx - badge_w // 2
+            badge_y = sy + radius + 8
+
+            # fundo escuro semitransparente simulado (cor sólida)
+            badge_bg = tuple(max(0, c // 4) for c in color) 
+            _fill_rect(surf, badge_x, badge_y, badge_w, badge_h, (18, 22, 18))
+            # borda colorida
+            pygame.draw.rect(surf, color, (badge_x, badge_y, badge_w, badge_h), 1)
+            surf.blit(name_surf, (badge_x + 8, badge_y + 4))
+
+            # Inicial estilizada no centro do círculo
+            STAGE_ABBRS = ['Re', 'En', 'Rc', 'Le', 'Ps']
+            abbr = STAGE_ABBRS[i]
+            abbr_surf   = self.f_xl.render(abbr, True, bright)
+            shadow_surf = self.f_xl.render(abbr, True, (20, 28, 18))
+            surf.blit(shadow_surf, (sx - abbr_surf.get_width()//2 + 2, sy - abbr_surf.get_height()//2 + 2))
+            surf.blit(abbr_surf,   (sx - abbr_surf.get_width()//2,     sy - abbr_surf.get_height()//2))
+
         return surf
 
 
@@ -906,7 +913,7 @@ class RhythmGame:
         final_char_y = view_y + (player_bg_y + map_y)
 
         anim = self.lobby_last_move if self.lobby_last_move in self.sprites else 'idle'
-        draw_char(scr, self.sprites, anim, int(final_char_x), int(final_char_y), self.char_frame)
+        draw_char(scr, self.sprites_lobby, anim, int(final_char_x), int(final_char_y), self.char_frame, size=CHAR_SIZE_LOBBY)
 
         overlay = pygame.Surface((W, H), pygame.SRCALPHA)
         overlay.fill((12, 16, 34, 100))
@@ -925,7 +932,7 @@ class RhythmGame:
         final_char_x = view_x + map_x + player_rel_x
         final_char_y = view_y + map_y + player_rel_y
 
-        draw_char(scr, self.sprites, anim, int(final_char_x), int(final_char_y), self.char_frame)
+        draw_char(scr, self.sprites_lobby, anim, int(final_char_x), int(final_char_y), self.char_frame, size=CHAR_SIZE_LOBBY)
 
         mini_w, mini_h = 220, 140
         mini_x = W - mini_w - 24
