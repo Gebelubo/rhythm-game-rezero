@@ -148,6 +148,28 @@ class RhythmGame:
         self.intensity_map: list = []
         self._intensity_surf = pygame.Surface((W, H), pygame.SRCALPHA)
 
+        self.menu_alpha = 0.0
+        self.fade_speed = 0.5 
+
+        self.music_delay_timer = 2.0
+        self.music_started = False
+
+        try:
+            path_opening = "musics/openingmenu.mp3"
+            pygame.mixer.music.load(path_opening)
+            pygame.mixer.music.set_volume(0.4)
+        except pygame.error:
+            print(f"Erro ao carregar música de abertura: {path_opening}")
+
+        self.menu_timer = 0.0
+        self.fade_speed = 0.7
+
+        # Alphas: [0: Fundo, 1: Título, 2: Frase, 3: Botão JOGAR, 4: TUTORIAL, 5: SAIR, 6: Rodapé]
+        self.alphas = [0.0] * 7
+
+        # Delays (em segundos) - eles vão aparecendo em escadinha
+        self.delays = [0.0, 2, 2.4, 2.8, 3.2, 3.6, 4.0]
+
 
     def music_time(self) -> float:
         pos = pygame.mixer.music.get_pos()
@@ -489,9 +511,11 @@ class RhythmGame:
         scr = self.screen
         scr.blit(self.menu_art, (0, 0))
 
-        self._txt(self.f_xl, 'Re:Song', W // 2, 52, (245, 245, 245), center=True)
+        a1 = self.alphas[1]
+        self._txt(self.f_xl, 'Re:Song', W // 2, 52, (int(245*a1), int(245*a1), int(245*a1)), center=True)
+        a2 = self.alphas[2]
         self._txt(self.f_md, 'E mesmo quando tudo der errado, você ainda pode recomeçar do zero',
-                  W // 2, 100, (225, 225, 235), center=True)
+                  W // 2, 100, (int(225*a2), int(225*a2), int(235*a2)), center=True)
 
         btn_w, btn_h, gap = 220, 54, 20
         start_x = W // 2 - btn_w // 2
@@ -504,15 +528,20 @@ class RhythmGame:
 
         self._menu_buttons = []
         for i, (label, bx, by, bw, bh, action, color) in enumerate(menu_buttons):
+            a_btn = self.alphas[i + 3]
+            btn_color = (int(color[0] * a_btn), int(color[1] * a_btn), int(color[2] * a_btn))
+
             self._draw_btn(scr, bx, by, bw, bh, label, self.f_md,
-                           active=(i == self.menu_selection), color=color)
+                           active=(i == self.menu_selection), color=btn_color)
             self._menu_buttons.append((bx, by, bw, bh, action))
 
         if self.menu_error:
             self._txt(self.f_sm, self.menu_error, W // 2, H - 140, (255, 90, 90), center=True)
 
+        a6 = self.alphas[6]
+        footer_color = (int(185*a6), int(185*a6), int(210*a6))
         self._txt(self.f_sm, 'ESC = sair   |   JOGAR leva ao lobby de fases',
-                  W // 2, H - 24, (185, 185, 210), center=True)
+                  W // 2, H - 24, footer_color, center=True)
 
     def _world_to_screen(self, wx: float, wy: float) -> tuple[int, int]:
         return (int(W // 2 + (wx - self.lobby_px)), int(H // 2 - (wy - self.lobby_py)))
@@ -605,6 +634,9 @@ class RhythmGame:
                     if self.lobby_stage_selected is not None:
                         self.lobby_stage_selected = None
                     else:
+                        pygame.mixer.music.stop()
+                        pygame.mixer.music.load("musics/openingmenu.mp3") 
+                        pygame.mixer.music.play(-1)
                         self.state = 'menu'
                 elif ev.key == pygame.K_RETURN:
                     if self.lobby_stage_selected is None and self.lobby_entered_stage is not None:
@@ -900,8 +932,22 @@ class RhythmGame:
     def run(self) -> None:
         running = True
         while running:
-            dt     = self.clock.tick(60) / 1000.0
+            dt =  self.clock.tick(60) / 1000.0
             events = pygame.event.get()
+
+            if self.state == 'menu':
+                self.menu_timer += dt
+                for i in range(len(self.alphas)):
+                    if self.menu_timer > self.delays[i]:
+                        if self.alphas[i] < 1.0:
+                            self.alphas[i] = min(1.0, self.alphas[i] + self.fade_speed * dt)
+
+            if (self.state == 'menu' or self.state == 'lobby') and not self.music_started:
+                if self.music_delay_timer > 0:
+                    self.music_delay_timer -= dt
+                else:
+                    pygame.mixer.music.play(-1) 
+                    self.music_started = True
 
             for ev in events:
                 if ev.type == pygame.QUIT:
@@ -919,6 +965,7 @@ class RhythmGame:
                         elif ev.key == pygame.K_RETURN:
                             _, _, _, _, action = list(self._menu_buttons)[self.menu_selection]
                             if action == 'play':
+                                pygame.mixer.music.stop()
                                 self.state = 'lobby'
                             elif action == 'tutorial':
                                 self.state = 'tutorial'
@@ -958,7 +1005,7 @@ class RhythmGame:
                         k = ev.key
                         if k == pygame.K_ESCAPE:
                             pygame.mixer.music.stop()
-                            self.state = 'menu'
+                            self.state = 'lobby'
                         elif k in KEY_MAP:
                             self.press_key(KEY_MAP[k])
                 self.update(dt)
