@@ -2,6 +2,7 @@ import pygame
 import os
 import sys
 import math
+import random
 
 LOBBY_STAGE_NAMES = [
     'Refazer', 'Entender', 'Reconstruir', 'Lembrar', 'Personalizada'
@@ -13,6 +14,30 @@ LOBBY_STAGE_COLORS = [
     (220, 165, 90),
     (200, 95, 175),
     (255, 200, 110),
+]
+
+_GRASS_COLORS = [
+    (52,  110, 52),
+    (60,  124, 55),
+    (72,  138, 60),
+    (80,  148, 65),
+]
+_PATH_COLORS = [
+    (148, 118, 82),
+    (160, 130, 90),
+    (138, 108, 72),
+]
+_FLOWER_COLORS = [
+    (255, 80,  120),
+    (255, 220, 60),
+    (200, 120, 255),
+    (255, 160, 60),
+    (255, 255, 255),
+]
+_BUSH_COLORS = [
+    (38,  90,  38),
+    (48, 105,  45),
+    (55, 120,  50),
 ]
 
 LOBBY_WORLD_XMIN = -800
@@ -60,6 +85,84 @@ from src.lib.cg_lib import (
 )
 
 from src.utils.render import bake_static_bg, bake_arrow_surf, DIRECTION_ANGLES
+
+# Funções de desenho pixel a pixel para detalhes como grama, caminhos, flores e arbustos.
+def _px(surf, x, y, color):
+    w, h = surf.get_size()
+    if 0 <= x < w and 0 <= y < h:
+        surf.set_at((x, y), color)
+
+def _fill_rect(surf, x, y, w, h, color):
+    pygame.draw.rect(surf, color, (x, y, w, h))
+
+def _pixel_grass(surf, x, y, w, h, rng):
+    tile = 4
+    for ty in range(y, y + h, tile):
+        for tx in range(x, x + w, tile):
+            base = rng.choice(_GRASS_COLORS)
+            tw = min(tile, x + w - tx)
+            th = min(tile, y + h - ty)
+            _fill_rect(surf, tx, ty, tw, th, base)
+            if rng.random() < 0.35:
+                bright = tuple(min(255, c + 22) for c in base)
+                _px(surf, tx, ty, bright)
+
+def _pixel_path(surf, x, y, w, h, rng):
+    tile = 4
+    for ty in range(y, y + h, tile):
+        for tx in range(x, x + w, tile):
+            base = rng.choice(_PATH_COLORS)
+            tw = min(tile, x + w - tx)
+            th = min(tile, y + h - ty)
+            _fill_rect(surf, tx, ty, tw, th, base)
+            if rng.random() < 0.12:
+                dark = tuple(max(0, c - 20) for c in base)
+                _px(surf, tx + 1, ty + 1, dark)
+                _px(surf, tx + 2, ty + 1, dark)
+                _px(surf, tx + 1, ty + 2, dark)
+
+def _draw_flower(surf, cx, cy, color, rng):
+    for dx, dy in [(-1,0),(1,0),(0,-1),(0,1)]:
+        _px(surf, cx + dx, cy + dy, color)
+    center_c = (255, 240, 80) if color != (255, 220, 60) else (255, 120, 40)
+    _px(surf, cx, cy, center_c)
+    stem = (48, 100, 40)
+    _px(surf, cx, cy + 1, stem)
+    _px(surf, cx, cy + 2, stem)
+
+def _draw_bush(surf, cx, cy, radius, rng):
+    for dy in range(-radius, radius + 1):
+        row_w = int(math.sqrt(max(0, radius * radius - dy * dy)))
+        for dx in range(-row_w, row_w + 1):
+            tx = cx + dx * 3
+            ty = cy + dy * 3
+            col = rng.choice(_BUSH_COLORS)
+            _fill_rect(surf, tx - 1, ty - 1, 3, 3, col)
+    for angle in range(0, 360, 12):
+        rad = math.radians(angle)
+        ex = int(cx + (radius * 3 - 2) * math.cos(rad))
+        ey = int(cy + (radius * 3 - 2) * math.sin(rad))
+        _px(surf, ex, ey, (30, 72, 30))
+
+def _draw_tree(surf, cx, cy, rng):
+    trunk_c = (100, 68, 35)
+    trunk_d = (80, 52, 25)
+    for dy in range(0, 18):
+        _fill_rect(surf, cx - 3, cy + dy, 6, 1, trunk_c if dy % 2 == 0 else trunk_d)
+    layers = [
+        (cy - 2,  14, (55, 130, 50)),
+        (cy - 10, 18, (62, 148, 55)),
+        (cy - 20, 14, (72, 162, 60)),
+    ]
+    for ly, lw, lc in layers:
+        half = lw // 2
+        for dy in range(-half // 2, half // 2 + 1):
+            row_w = int(math.sqrt(max(0, (lw // 2) ** 2 - dy * dy)))
+            _fill_rect(surf, cx - row_w, ly + dy, row_w * 2, 1, lc)
+            _px(surf, cx - row_w,     ly + dy, tuple(max(0, c - 20) for c in lc))
+            _px(surf, cx + row_w - 1, ly + dy, tuple(max(0, c - 20) for c in lc))
+        _px(surf, cx - 2, ly - half // 2 + 1, tuple(min(255, c + 30) for c in lc))
+        _px(surf, cx - 1, ly - half // 2,     tuple(min(255, c + 30) for c in lc))
 
 class RhythmGame:
 
@@ -574,17 +677,63 @@ class RhythmGame:
 
     def _build_lobby_background(self) -> pygame.Surface:
         STAGE_SYMBOLS = ['★', '♦', '✦', '❋', '♪']
-        width = LOBBY_WORLD_XMAX - LOBBY_WORLD_XMIN
+        width  = LOBBY_WORLD_XMAX - LOBBY_WORLD_XMIN
         height = LOBBY_WORLD_YMAX - LOBBY_WORLD_YMIN
-        surf = pygame.Surface((width, height))
-        surf.fill((14, 18, 34))
+        surf   = pygame.Surface((width, height))
+        rng    = random.Random(42)
 
-        for gx in range(LOBBY_WORLD_XMIN + 20, LOBBY_WORLD_XMAX, LOBBY_GRID_SPACING):
-            x = gx - LOBBY_WORLD_XMIN
-            line_bresenham(surf, x, 0, x, height, (30, 30, 55))
-        for gy in range(LOBBY_WORLD_YMIN + 20, LOBBY_WORLD_YMAX, LOBBY_GRID_SPACING):
-            y = LOBBY_WORLD_YMAX - gy
-            line_bresenham(surf, 0, y, width, y, (30, 30, 55))
+        _pixel_grass(surf, 0, 0, width, height, rng)
+
+        path_w = 40
+        cx_path_y = height // 2 - path_w // 2
+        _pixel_path(surf, 0, cx_path_y, width, path_w, rng)
+        cx_path_x = width // 2 - path_w // 2
+        _pixel_path(surf, cx_path_x, 0, path_w, height, rng)
+        center_bg = self._world_to_bg(0, 0)
+        for i in range(4):
+            sx, sy = self._world_to_bg(*LOBBY_STAGE_POS[i])
+            dx = center_bg[0] - sx
+            dy = center_bg[1] - sy
+            dist  = max(1, int(math.hypot(dx, dy)))
+            steps = dist // 6
+            for step in range(steps + 1):
+                t  = step / max(1, steps)
+                px = int(sx + dx * t)
+                py = int(sy + dy * t)
+                _pixel_path(surf, px - 14, py - 14, 28, 28, rng)
+        border_c = (42, 95, 42)
+        for x in range(0, width, 4):
+            for off in [cx_path_y - 2, cx_path_y + path_w]:
+                _fill_rect(surf, x, off, 4, 2, border_c)
+        for y in range(0, height, 4):
+            for off in [cx_path_x - 2, cx_path_x + path_w]:
+                _fill_rect(surf, off, y, 2, 4, border_c)
+        bush_positions = [
+            (180,180),(1420,180),(180,1020),(1420,1020),
+            (500,300),(1100,300),(500,900),(1100,900),
+            (300,600),(1300,600),
+            (750,200),(850,200),(750,1000),(850,1000),
+            (200,480),(200,720),(1400,480),(1400,720),
+        ]
+
+        for bx, by in bush_positions:
+            _draw_bush(surf, bx, by, rng.randint(4, 7), rng)
+
+        for _ in range(320):
+            fx = rng.randint(10, width - 10)
+            fy = rng.randint(10, height - 10)
+            if abs(fy - height//2) < path_w+30 or abs(fx - width//2) < path_w+30:
+                continue
+            _draw_flower(surf, fx, fy, rng.choice(_FLOWER_COLORS), rng)
+
+        tree_positions = [
+            (80,80),(1520,80),(80,1120),(1520,1120),
+            (400,100),(1200,100),(400,1100),(1200,1100),
+            (80,400),(80,800),(1520,400),(1520,800),
+            (680,80),(920,80),(680,1120),(920,1120),
+        ]
+        for tx, ty in tree_positions:
+            _draw_tree(surf, tx, ty, rng)
 
         for i, (wx, wy) in enumerate(LOBBY_STAGE_POS):
             sx, sy = self._world_to_bg(wx, wy)
@@ -592,33 +741,41 @@ class RhythmGame:
             color  = LOBBY_STAGE_COLORS[i]
             dim    = tuple(max(0, c - 50) for c in color)
             bright = tuple(min(255, c + 80) for c in color)
-
-            # Sombra levemente deslocada
-            for dy in range(-radius + 2, radius):
-                dx = int(math.sqrt(max(0, (radius - 2) * (radius - 2) - dy * dy)))
-                pygame.draw.line(surf, (10, 12, 22), (sx - dx + 4, sy + dy + 4), (sx + dx + 4, sy + dy + 4))
-            # Círculo preenchido
-            for dy in range(-radius, radius + 1):
-                dx = int(math.sqrt(max(0, radius * radius - dy * dy)))
+            ring_r = radius + 14
+            for dy in range(-ring_r, ring_r + 1):
+                row_w = int(math.sqrt(max(0, ring_r*ring_r - dy*dy)))
+                inner = int(math.sqrt(max(0, radius*radius - dy*dy)))
+                for dx in range(-row_w, -inner):
+                    _px(surf, sx+dx, sy+dy, (88, 160, 72))
+                for dx in range(inner, row_w):
+                    _px(surf, sx+dx, sy+dy, (88, 160, 72))
+            for dy in range(-radius+2, radius):
+                dx = int(math.sqrt(max(0, (radius-2)**2 - dy*dy)))
+                pygame.draw.line(surf, (20,28,18), (sx-dx+5, sy+dy+5), (sx+dx+5, sy+dy+5))
+            for dy in range(-radius, radius+1):
+                dx = int(math.sqrt(max(0, radius*radius - dy*dy)))
                 t  = abs(dy) / radius
-                shade = tuple(int(dim[c] + (color[c] - dim[c]) * (1 - t * 0.4)) for c in range(3))
-                pygame.draw.line(surf, shade, (sx - dx, sy + dy), (sx + dx, sy + dy))
+                shade = tuple(int(dim[c] + (color[c]-dim[c])*(1-t*0.4)) for c in range(3))
+                pygame.draw.line(surf, shade, (sx-dx, sy+dy), (sx+dx, sy+dy))
+
+            circle_midpoint(surf, sx, sy, radius,     tuple(min(255, c+40) for c in color))
+            circle_midpoint(surf, sx, sy, radius-1,   tuple(min(255, c+20) for c in color))
+            circle_midpoint(surf, sx, sy, radius-8,   tuple(max(0,   c-20) for c in color))
+
+            for angle in range(0, 360, 18):
+                rad = math.radians(angle)
+                ex = int(sx + (radius-4)*math.cos(rad))
+                ey = int(sy + (radius-4)*math.sin(rad))
+                _px(surf, ex, ey, bright)
             
-            # Anel externo
-            circle_midpoint(surf, sx, sy, radius,     tuple(min(255, c + 40) for c in color))
-            circle_midpoint(surf, sx, sy, radius - 1, tuple(min(255, c + 20) for c in color))
-
-            # Linha decorativa interna
-            circle_midpoint(surf, sx, sy, radius - 8, tuple(max(0, c - 20) for c in color))
-
-            # Nome acima
-            label = self.f_md.render(LOBBY_STAGE_NAMES[i], True, (235, 235, 235))
-            surf.blit(label, (sx - label.get_width() // 2, sy - radius - 22))
-
-            # Símbolo dentro
+            label  = self.f_md.render(LOBBY_STAGE_NAMES[i], True, (235,235,235))
+            surf.blit(label, (sx - label.get_width()//2, sy - radius - 22))
             symbol = self.f_lg.render(STAGE_SYMBOLS[i], True, bright)
-            surf.blit(symbol, (sx - symbol.get_width() // 2, sy - symbol.get_height() // 2))
+            surf.blit(symbol, (sx - symbol.get_width()//2, sy - symbol.get_height()//2))
+        
         return surf
+
+
 
     def _lobby_difficulty_buttons(self):
         gap = 16
