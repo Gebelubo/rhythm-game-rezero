@@ -3,6 +3,7 @@ import os
 import sys
 import math
 import random
+import json
 
 LOBBY_STAGE_NAMES = [
     'Refazer', 'Entender', 'Reconstruir', 'Lembrar', 'Personalizada'
@@ -66,6 +67,7 @@ from src.music_backend.note import Note
 from src.music_backend.difficulty import apply_difficulty
 from src.music_backend.utils import (
     detect_beats,
+    load_beatmap
 )
 
 from src.utils.render import (
@@ -75,13 +77,13 @@ from src.utils.render import (
 from src.sprites import draw_char, load_sprites
 
 from src.music_backend.backend_config import (
-    DIFFICULTY_COLORS, DIFFICULTY_NAMES
+    DIFFICULTY_COLORS, DIFFICULTY_NAMES, STAGE_MUSIC_PATHS
 )
 
-from src.lib.cg_lib import (
+from src.funcs.cg_lib import (
     Window, Viewport, boundary_fill, circle_midpoint, cohen_sutherland_clip,
     draw_line_clipped, draw_line_viewport, draw_polygon, draw_polygon_viewport,
-    ellipse_midpoint, flood_fill, line_bresenham, scanline_fill, set_pixel
+    ellipse_midpoint, flood_fill, line_bresenham, scanline_fill, set_pixel, draw_rectangle, fill_rectangle
 )
 
 from src.utils.render import bake_static_bg, bake_arrow_surf, DIRECTION_ANGLES
@@ -93,7 +95,7 @@ def _px(surf, x, y, color):
         surf.set_at((x, y), color)
 
 def _fill_rect(surf, x, y, w, h, color):
-    pygame.draw.rect(surf, color, (x, y, w, h))
+    fill_rectangle(surf, x, y, w, h, color)
 
 def _pixel_grass(surf, x, y, w, h, rng):
     tile = 4
@@ -215,6 +217,7 @@ class RhythmGame:
         self.menu_page = 'main'
         self._menu_buttons = []
         self._lobby_buttons = []
+        self._settings_buttons = []
         self._exit_requested = False
 
         self.state          = 'menu'
@@ -285,28 +288,51 @@ class RhythmGame:
         # Delays (em segundos) - eles vão aparecendo em escadinha
         self.delays = [0.0, 2, 2.4, 2.8, 3.2, 3.6, 4.0]
 
+        self.settings = {
+                "adm_mode": False,
+                "show_fps": False,
+                "auto_play": False,
+                "volume": 0.5
+            }
+
 
     def music_time(self) -> float:
         pos = pygame.mixer.music.get_pos()
         return pos / 1000.0 if pos >= 0 else self.duration + 10.0
 
 
-    def load_song(self, path: str, reuse_raw: bool = False, stage_idx: int = 0) -> None:
+    def load_song(self, path: str, reuse_raw: bool = False, stage_idx: int = 0, pre_defined: bool = False) -> None:
         self.stage_idx = stage_idx if stage_idx is not None else 0
         d2x = {d: self.lane_xs[i] for i, d in enumerate(DIRECTIONS)}
 
-        duration = self.duration
-        if not reuse_raw or not self._raw_events:
-            self.screen.blit(self.bg_surf, (0, 0))
-            diff_c = DIFFICULTY_COLORS[self.difficulty]
-            self._txt(self.f_lg, '♪  Analisando batidas…  ♪', W // 2, H // 2 - 24,
-                      (185, 145, 255), center=True)
-            self._txt(self.f_md, f'Dificuldade: {self.difficulty}', W // 2, H // 2 + 18,
-                      diff_c, center=True)
-            pygame.display.flip()
+        if pre_defined==False:
 
+            duration = self.duration
+            if not reuse_raw or not self._raw_events:
+                self.screen.blit(self.bg_surf, (0, 0))
+                diff_c = DIFFICULTY_COLORS[self.difficulty]
+                self._txt(self.f_lg, '♪  Analisando batidas…  ♪', W // 2, H // 2 - 24,
+                        (185, 145, 255), center=True)
+                self._txt(self.f_md, f'Dificuldade: {self.difficulty}', W // 2, H // 2 + 18,
+                        diff_c, center=True)
+                pygame.display.flip()
+
+                try:
+                    raw_events, bpm, duration = detect_beats(path)
+                except Exception as e:
+                    self.menu_error = f'Erro ao analisar: {str(e)[:60]}'
+                    return
+
+                self._raw_events = raw_events
+                self.duration    = duration
+                self.bpm         = bpm
+                self.music_path  = path
+            else:
+                raw_events = self._raw_events
+
+        else:
             try:
-                raw_events, bpm, duration = detect_beats(path)
+                raw_events, bpm, duration = load_beatmap(path)
             except Exception as e:
                 self.menu_error = f'Erro ao analisar: {str(e)[:60]}'
                 return
@@ -315,8 +341,8 @@ class RhythmGame:
             self.duration    = duration
             self.bpm         = bpm
             self.music_path  = path
-        else:
-            raw_events = self._raw_events
+
+
 
         notes_raw = apply_difficulty(raw_events, self.duration, self.difficulty)
 
@@ -349,6 +375,54 @@ class RhythmGame:
         pygame.mixer.music.load(path)
         pygame.mixer.music.play()
         self.state = 'playing'
+
+    
+    def load_song_recording_mode(self, path: str, stage_idx: int = 0) -> None:
+        self.stage_idx = stage_idx if stage_idx is not None else 0
+
+        # Estado base
+        self._raw_events = []
+        self.recorded_events = []  # <- NOVO: onde vamos salvar
+
+        self.duration = 0.0
+        self.bpm = 0.0
+        self.music_path = path
+
+        # UI inicial
+        self.screen.blit(self.bg_surf, (0, 0))
+        self._txt(self.f_lg, '● MODO GRAVAÇÃO ●', W // 2, H // 2 - 24,
+                (255, 120, 120), center=True)
+        self._txt(self.f_md, 'Pressione as teclas no ritmo!', W // 2, H // 2 + 18,
+                (200, 200, 200), center=True)
+        pygame.display.flip()
+
+        # Carrega duração
+        try:
+            snd = pygame.mixer.Sound(path)
+            self.duration = snd.get_length()
+            del snd
+        except Exception:
+            self.duration = 240.0  # fallback
+
+        # Zera estado do jogo
+        self.notes = []
+        self.score = self.combo = self.max_combo = 0
+        self.perfects = self.goods = self.oks = self.misses = 0
+        self.fb_text = ''
+
+        self.char_anim  = 'idle'
+        self.char_timer = 0.0
+        self.lane_flash = {d: 0.0 for d in DIRECTIONS}
+
+        # Controle de tempo
+        self.recording_start_time = None
+        self.is_recording = True
+
+        # Toca música
+        pygame.mixer.music.load(path)
+        pygame.mixer.music.play()
+
+        self.state = 'recording'
 
 
     def _current_intensity(self) -> float:
@@ -644,8 +718,9 @@ class RhythmGame:
         start_y = 160
         menu_buttons = [
             ('JOGAR', start_x, start_y, btn_w, btn_h, 'play', (95, 180, 255)),
-            ('TUTORIAL', start_x, start_y + btn_h + gap, btn_w, btn_h, 'tutorial', (155, 115, 235)),
-            ('SAIR', start_x, start_y + 2 * (btn_h + gap), btn_w, btn_h, 'exit', (235, 90, 110)),
+            ('CONFIGURAÇÕES', start_x, start_y + btn_h + gap, btn_w, btn_h, 'settings', (120, 200, 120)),
+            ('TUTORIAL', start_x, start_y + 2 * (btn_h + gap), btn_w, btn_h, 'tutorial', (155, 115, 235)),
+            ('SAIR', start_x, start_y + 3 * (btn_h + gap), btn_w, btn_h, 'exit', (235, 90, 110)),
         ]
 
         self._menu_buttons = []
@@ -732,6 +807,8 @@ class RhythmGame:
             dim    = tuple(max(0, c - 50) for c in color)
             bright = tuple(min(255, c + 80) for c in color)
             ring_r = radius + 14
+
+            # Anel externo
             for dy in range(-ring_r, ring_r + 1):
                 row_w = int(math.sqrt(max(0, ring_r*ring_r - dy*dy)))
                 inner = int(math.sqrt(max(0, radius*radius - dy*dy)))
@@ -739,14 +816,28 @@ class RhythmGame:
                     _px(surf, sx+dx, sy+dy, (88, 160, 72))
                 for dx in range(inner, row_w):
                     _px(surf, sx+dx, sy+dy, (88, 160, 72))
+
             for dy in range(-radius+2, radius):
                 dx = int(math.sqrt(max(0, (radius-2)**2 - dy*dy)))
-                pygame.draw.line(surf, (20,28,18), (sx-dx+5, sy+dy+5), (sx+dx+5, sy+dy+5))
+                line_bresenham(
+                    surf,
+                    sx - dx + 5, sy + dy + 5,
+                    sx + dx + 5, sy + dy + 5,
+                    (20, 28, 18)
+                )
+
+            # Preenchimento com shading
             for dy in range(-radius, radius+1):
                 dx = int(math.sqrt(max(0, radius*radius - dy*dy)))
                 t  = abs(dy) / radius
-                shade = tuple(int(dim[c] + (color[c]-dim[c])*(1-t*0.4)) for c in range(3))
-                pygame.draw.line(surf, shade, (sx-dx, sy+dy), (sx+dx, sy+dy))
+                shade = tuple(int(dim[c] + (color[c]-dim[c])*(1 - t*0.4)) for c in range(3))
+
+                line_bresenham(
+                    surf,
+                    sx - dx, sy + dy,
+                    sx + dx, sy + dy,
+                    shade
+                )
 
             circle_midpoint(surf, sx, sy, radius,     tuple(min(255, c+40) for c in color))
             circle_midpoint(surf, sx, sy, radius-1,   tuple(min(255, c+20) for c in color))
@@ -769,7 +860,7 @@ class RhythmGame:
             badge_bg = tuple(max(0, c // 4) for c in color) 
             _fill_rect(surf, badge_x, badge_y, badge_w, badge_h, (18, 22, 18))
             # borda colorida
-            pygame.draw.rect(surf, color, (badge_x, badge_y, badge_w, badge_h), 1)
+            draw_rectangle(surf, badge_x, badge_y, badge_w, badge_h, color)
             surf.blit(name_surf, (badge_x + 8, badge_y + 4))
 
             # Inicial estilizada no centro do círculo
@@ -1110,6 +1201,139 @@ class RhythmGame:
         self._txt(self.f_sm, 'ESC = voltar ao menu  |  clique para voltar',
                 W // 2, py + ph - 18, (90, 85, 130), center=True)
 
+    def _draw_settings(self) -> None:
+        scr = self.screen
+        scr.blit(self.menu_art, (0, 0))
+
+        # Overlay
+        overlay = pygame.Surface((W, H), pygame.SRCALPHA)
+        overlay.fill((8, 12, 28, 220))
+        scr.blit(overlay, (0, 0))
+
+        px, py, pw, ph = 80, 60, W - 160, H - 120
+
+        # Fundo
+        scanline_fill(scr, [(px,py),(px+pw,py),(px+pw,py+ph),(px,py+ph)], (12, 15, 35))
+        bc = (130, 110, 220)
+        line_bresenham(scr, px, py, px+pw, py, bc)
+        line_bresenham(scr, px, py+ph, px+pw, py+ph, bc)
+        line_bresenham(scr, px, py, px, py+ph, bc)
+        line_bresenham(scr, px+pw, py, px+pw, py+ph, bc)
+
+        # Título
+        self._txt(self.f_xl, 'Configurações', W // 2, py + 30, (235,235,255), center=True)
+
+        line_bresenham(scr, px+20, py+70, px+pw-20, py+70, (50,45,90))
+
+        # ========================
+        # CONFIGS (estado)
+        # ========================
+        if not hasattr(self, "settings"):
+            self.settings = {
+                "adm_mode": False,
+                "show_fps": False,
+                "auto_play": False,
+                "volume": 0.5
+            }
+
+        # ========================
+        # FUNÇÃO BOTÃO
+        # ========================
+        def draw_toggle(x, y, label, key, info=None):
+            w, h = 260, 40
+            mx, my = pygame.mouse.get_pos()
+
+            active = self.settings[key]
+
+            base_color = (30, 30, 70) if not active else (60, 40, 120)
+            border = (120, 100, 220) if active else (70, 70, 120)
+
+            hover = x <= mx <= x+w and y <= my <= y+h
+            if hover:
+                border = (180, 160, 255)
+
+            # fundo
+            scanline_fill(scr, [(x,y),(x+w,y),(x+w,y+h),(x,y+h)], base_color)
+
+            # borda
+            line_bresenham(scr, x,y, x+w,y, border)
+            line_bresenham(scr, x,y+h, x+w,y+h, border)
+            line_bresenham(scr, x,y, x,y+h, border)
+            line_bresenham(scr, x+w,y, x+w,y+h, border)
+
+            # texto
+            state_txt = "ON" if active else "OFF"
+            state_color = (120,255,120) if active else (255,120,120)
+
+            self._txt(self.f_sm, label, x+10, y+12, (220,220,255))
+            self._txt(self.f_sm, state_txt, x+w-50, y+12, state_color)
+
+            # botão info (i)
+            if info:
+                ix = x + w + 10
+                iy = y + 8
+
+                scanline_fill(scr, [(ix,iy),(ix+24,iy),(ix+24,iy+24),(ix,iy+24)], (20,20,50))
+                line_bresenham(scr, ix,iy, ix+24,iy, (120,120,200))
+                line_bresenham(scr, ix,iy+24, ix+24,iy+24, (120,120,200))
+                line_bresenham(scr, ix,iy, ix,iy+24, (120,120,200))
+                line_bresenham(scr, ix+24,iy, ix+24,iy+24, (120,120,200))
+
+                self._txt(self.f_sm, "i", ix+12, iy+10, (200,200,255), center=True)
+
+                if ix <= mx <= ix+24 and iy <= my <= iy+24:
+                    self._txt(self.f_sm, info, ix+30, iy+4, (180,180,220))
+
+            return (x, y, w, h)
+
+        # ========================
+        # DESENHO
+        # ========================
+        base_y = py + 100
+        gap = 60
+
+        self._settings_buttons = []
+
+        self._settings_buttons.append(("adm_mode", draw_toggle(px+40, base_y, "Modo ADM", "adm_mode",
+            "Permite acessar ferramentas de debug")))
+
+        self._settings_buttons.append(("show_fps", draw_toggle(px+40, base_y+gap, "Mostrar FPS", "show_fps")))
+
+        self._settings_buttons.append(("auto_play", draw_toggle(px+40, base_y+gap*2, "Auto Play", "auto_play",
+            "Joga sozinho (modo debug)")))
+
+        # ========================
+        # VOLUME (slider fake)
+        # ========================
+        vx = px + pw//2 + 40
+        vy = base_y
+
+        self._txt(self.f_md, "Volume", vx, vy-30, (200,180,255))
+
+        bar_w = 220
+        bar_h = 10
+
+        vol = self.settings["volume"]
+
+        # fundo barra
+        scanline_fill(scr, [(vx,vy),(vx+bar_w,vy),(vx+bar_w,vy+bar_h),(vx,vy+bar_h)], (40,40,80))
+
+        # preenchimento
+        fill_w = int(bar_w * vol)
+        scanline_fill(scr, [(vx,vy),(vx+fill_w,vy),(vx+fill_w,vy+bar_h),(vx,vy+bar_h)], (120,100,255))
+
+        # borda
+        line_bresenham(scr, vx,vy, vx+bar_w,vy, (100,100,200))
+        line_bresenham(scr, vx,vy+bar_h, vx+bar_w,vy+bar_h, (100,100,200))
+        line_bresenham(scr, vx,vy, vx,vy+bar_h, (100,100,200))
+        line_bresenham(scr, vx+bar_w,vy, vx+bar_w,vy+bar_h, (100,100,200))
+
+        self._txt(self.f_sm, f"{int(vol*100)}%", vx+bar_w+10, vy-2, (180,180,255))
+
+        self._volume_bar = (vx, vy, bar_w, bar_h)
+
+        # Footer
+        self._txt(self.f_sm, "ESC = voltar", W//2, py+ph-20, (100,100,150), center=True)
 
     def _draw_results(self) -> None:
         scr = self.screen
@@ -1180,13 +1404,6 @@ class RhythmGame:
             self.difficulty = difficulty
         path = self.input_text.strip().strip('"\'')
 
-        STAGE_MUSIC_PATHS = [
-            'musics/refazer.mp3',
-            'musics/entender.mp3',
-            'musics/reconstruir.mp3',
-            'musics/lembrar.mp3',
-        ]
-
         if self.stage_idx in {0, 1, 2, 3}:
             music_path = os.path.abspath(
                 os.path.join(os.path.dirname(__file__), '..', STAGE_MUSIC_PATHS[self.stage_idx])
@@ -1195,7 +1412,10 @@ class RhythmGame:
                 self.menu_error = f'Música não encontrada: {STAGE_MUSIC_PATHS[self.stage_idx]}'
                 return
             self.menu_error = ''
-            self.load_song(music_path, stage_idx=stage_idx)
+            if self.settings.get("adm_mode", False):
+                self.load_song_recording_mode(music_path, stage_idx=stage_idx)
+            else:
+                self.load_song(music_path, stage_idx=stage_idx, pre_defined=True)
             return
         if not path:
             self.menu_error = 'Digite o nome da música personalizada.'
@@ -1211,7 +1431,69 @@ class RhythmGame:
             self.menu_error = 'Formato inválido. Use .mp3, .ogg, .wav ou .flac'
             return
         self.menu_error = ''
-        self.load_song(music_path, stage_idx=4)
+        self.load_song(music_path, stage_idx=4, pre_defined=False)
+
+    def save_recorded_map(self):
+        if not self.recorded_events:
+            print("Nenhum evento gravado.")
+            return
+
+        self.recorded_events.sort(key=lambda x: x[0])
+
+        name = os.path.splitext(os.path.basename(self.music_path))[0]
+
+        data = {
+            "music": name,
+            "duration": self.duration,
+            "bpm": self.bpm,
+            "events": [
+                {
+                    "time": t,
+                    "direction": d,
+                    "strength": s,
+                    "energy": e
+                }
+                for (t, d, s, e) in self.recorded_events
+            ]
+        }
+
+        os.makedirs("src/beatmap", exist_ok=True)
+        out_path = f"src/beatmap/{name}.json"
+
+        with open(out_path, "w") as f:
+            json.dump(data, f, indent=4)
+
+        print(f"[REC] Beatmap salvo em: {out_path}")
+
+    def update_recording(self):
+        if self.state != 'recording':
+            return
+
+        if not pygame.mixer.music.get_busy():
+            print("[REC] Música terminou, salvando mapa...")
+            self.save_recorded_map()
+            self.is_recording = False
+            self.state = 'menu'  # ou outro estado
+
+    def handle_recording_input(self, event):
+        if self.state != 'recording':
+            return
+
+        if event.type == pygame.KEYDOWN:
+            key_map = {
+                pygame.K_UP: 'up',
+                pygame.K_DOWN: 'down',
+                pygame.K_LEFT: 'left',
+                pygame.K_RIGHT: 'right',
+            }
+
+            if event.key in key_map:
+                t = pygame.mixer.music.get_pos() / 1000.0  # ms → s
+                d = key_map[event.key]
+
+                print(f"[REC] {t:.3f}s -> {d}")
+
+                self.recorded_events.append((t, d, 1.0, 0.5))
 
     def run(self) -> None:
         running = True
@@ -1254,6 +1536,8 @@ class RhythmGame:
                                 self.state = 'lobby'
                             elif action == 'tutorial':
                                 self.state = 'tutorial'
+                            elif action == 'settings':
+                                self.state = 'settings'
                             elif action == 'exit':
                                 self._exit_requested = True
                     elif ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 1:
@@ -1266,6 +1550,8 @@ class RhythmGame:
                                     self.state = 'lobby'
                                 elif action == 'tutorial':
                                     self.state = 'tutorial'
+                                elif action == 'settings':
+                                    self.state = 'settings'
                                 elif action == 'exit':
                                     self._exit_requested = True
                         if self._exit_requested:
@@ -1284,6 +1570,30 @@ class RhythmGame:
                     elif ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 1:
                         self.state = 'menu'
                 self._draw_tutorial()
+
+            elif self.state == 'settings':
+                for ev in events:
+                    if ev.type == pygame.KEYDOWN and ev.key == pygame.K_ESCAPE:
+                        self.state = 'menu'
+
+                    elif ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 1:
+                        mx, my = ev.pos
+
+                        # toggles
+                        for key, (x,y,w,h) in self._settings_buttons:
+                            if x <= mx <= x+w and y <= my <= y+h:
+                                self.settings[key] = not self.settings[key]
+                                print(f"{key} -> {self.settings[key]}")
+
+                        # volume
+                        vx, vy, vw, vh = self._volume_bar
+                        if vx <= mx <= vx+vw and vy <= my <= vy+vh:
+                            rel = (mx - vx) / vw
+                            self.settings["volume"] = max(0.0, min(1.0, rel))
+                            pygame.mixer.music.set_volume(self.settings["volume"])
+
+                self._draw_settings()
+
 
             elif self.state == 'playing':
                 for ev in events:
@@ -1320,6 +1630,21 @@ class RhythmGame:
                             if bx2 <= mx <= bx2+bw2 and by2 <= my <= by2+bh2:
                                 self.difficulty = dname
                 self._draw_results()
+
+            elif self.state == 'recording':
+                for ev in events:
+                    if ev.type == pygame.KEYDOWN:
+                        if ev.key == pygame.K_ESCAPE:
+                            print("[REC] Cancelado")
+                            pygame.mixer.music.stop()
+                            self.state = 'menu'
+                        else:
+                            self.handle_recording_input(ev)
+
+                self.update_recording()
+                self._draw_playing()  # pode reaproveitar o draw
+
+                
 
             if self._exit_requested:
                 running = False

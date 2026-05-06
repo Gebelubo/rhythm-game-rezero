@@ -42,3 +42,10 @@ DIFFICULTY_COLORS = {
     'Difícil': (255, 165,  40),
     'Expert':  (255,  60,  60),
 }
+
+STAGE_MUSIC_PATHS = [
+    'musics/refazer.mp3',
+    'musics/entender.mp3',
+    'musics/reconstruir.mp3',
+    'musics/lembrar.mp3',
+]

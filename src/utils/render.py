@@ -1,10 +1,11 @@
-from src.lib.cg_lib import (
+from src.funcs.cg_lib import (
     scanline_fill,
     draw_polygon,
     line_bresenham,
     rotate,
     load_texture,
     texture_map_triangle,
+    scale_texture
 )
 from src.config import (
     W, H, HUD_H,
@@ -25,7 +26,7 @@ def _get_texture(size: int):
     if os.path.exists(path):
         try:
             tex = load_texture(path)
-            tex = pygame.transform.smoothscale(tex, (size * 2, size * 2))
+            tex = scale_texture(tex, size * 2, size * 2)
             _texture_cache[size] = tex
             return tex
         except Exception:

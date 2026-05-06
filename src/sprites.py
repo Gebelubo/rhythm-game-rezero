@@ -2,7 +2,7 @@ import os
 import pygame
 
 from src.config import CHAR_SIZE, DIRECTIONS, LANE_COLORS
-from src.lib.cg_lib import (
+from src.funcs.cg_lib import (
     set_pixel,
     circle_midpoint,
     scanline_fill,

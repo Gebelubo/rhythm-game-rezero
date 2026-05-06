@@ -1,6 +1,7 @@
 from src.music_backend.backend_config import (
     BAND_HZ, BAND_DIR,
 )
+
 import math
 
 import pygame
@@ -40,7 +41,6 @@ def detect_beats(path: str):
         import librosa
         import numpy as np
 
-        print("Analisando espectro e intensidade…")
         SR    = 22050
         HOP   = 512
         N_FFT = 2048
@@ -131,4 +131,46 @@ def detect_beats(path: str):
             raw_events.append((t, d2, strength * 0.75, e_local))
 
     raw_events.sort(key=lambda x: x[0])
+    return raw_events, bpm, duration
+
+import json
+import os
+BEATMAP_DIR = 'src/beatmap/'
+
+def load_beatmap(path: str):
+
+    name = os.path.splitext(os.path.basename(path))[0] + ".json"
+
+    complete_path = os.path.join(BEATMAP_DIR, name)
+    if not os.path.exists(complete_path):
+        print(f"[LOAD] Beatmap não encontrado: {complete_path}")
+        return [], 120.0, 0.0
+
+    with open(complete_path, 'r') as f:
+        data = json.load(f)
+
+    raw_events = []
+
+    events = data.get("events", [])
+    for ev in events:
+        t = float(ev.get("time", 0.0))
+        d = ev.get("direction", "up")
+        strength = float(ev.get("strength", 0.8))
+        e_local  = float(ev.get("energy", 0.5))
+
+        raw_events.append((t, d, strength, e_local))
+
+    # Ordena por segurança
+    raw_events.sort(key=lambda x: x[0])
+
+    bpm = float(data.get("bpm", 120.0))
+    duration = float(data.get("duration", 0.0))
+
+    # fallback caso duration não exista
+    if duration <= 0 and raw_events:
+        duration = raw_events[-1][0] + 2.0
+
+    print(f"[LOAD] {len(raw_events)} eventos carregados")
+    print(f"[LOAD] BPM: {bpm}, Duração: {duration:.2f}s")
+
     return raw_events, bpm, duration
