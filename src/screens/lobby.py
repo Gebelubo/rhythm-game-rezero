@@ -573,7 +573,6 @@ def update_lobby(events, dt, game) -> None:
 # ── Draw ───────────────────────────────────────────────────────────────────────
 
 def draw_lobby(screen, fonts, game, lobby_bg_surf, menu_art) -> None:
-    print(f"char: {game.sprite_folder}")
     f_xl, f_lg, f_md, f_sm = fonts
     W, H = screen.get_size()
 
