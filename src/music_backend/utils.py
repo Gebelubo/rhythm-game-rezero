@@ -6,6 +6,8 @@ import math
 
 import pygame
 
+from src.music_backend.backend_config import DIFFICULTY_MONEY
+
 def _hz_to_bin(hz: float, sr: int, n_fft: int) -> int:
     return int(hz / (sr / 2) * (n_fft // 2 + 1))
 
@@ -174,3 +176,36 @@ def load_beatmap(path: str):
     print(f"[LOAD] BPM: {bpm}, Duração: {duration:.2f}s")
 
     return raw_events, bpm, duration
+
+def calc_reward(acc: float, difficulty: str) -> int:
+
+    base = DIFFICULTY_MONEY.get(difficulty, 70)
+
+    # curva forte de recompensa
+    # accuracy baixa destrói o valor
+    acc_curve = acc ** 2.2
+
+    # bônus extra para full combo/quase perfeito
+    bonus = 1.0
+
+    if acc >= 0.98:
+        bonus = 1.35
+    elif acc >= 0.95:
+        bonus = 1.20
+    elif acc >= 0.90:
+        bonus = 1.10
+
+    reward = int(base * acc_curve * bonus)
+
+    # mínimo simbólico
+    if acc >= 0.30:
+        reward = max(5, reward)
+    else:
+        reward = 0
+
+    return reward
+
+def calc_acc(game):
+    total = game.perfects + game.goods + game.oks + game.misses
+    return (game.perfects + game.goods * 0.67 + game.oks * 0.33) / max(1, total)
+

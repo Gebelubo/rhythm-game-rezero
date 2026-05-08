@@ -17,6 +17,10 @@ from src.utils.render import bake_static_bg, bake_arrow_surf, DIRECTION_ANGLES
 from src.utils.ui import _txt, _draw_btn
 from src.sprites import draw_char, load_sprites
 
+from src.entities.char import Character
+
+from src.music_backend.utils import calc_acc, calc_reward
+
 from src.funcs.cg_lib import (
     Window, Viewport, boundary_fill, circle_midpoint, cohen_sutherland_clip,
     draw_line_clipped, draw_line_viewport, draw_polygon, draw_polygon_viewport,
@@ -27,7 +31,7 @@ from src.funcs.cg_lib import (
 from src.screens.menu import (
     load_menu_bg_image, build_menu_art,
     draw_menu, draw_tutorial, draw_settings,
-    build_splash_screen, draw_splash
+    build_splash_screen, draw_splash, draw_character_selector, draw_shop
 )
 from src.screens.lobby import (
     build_lobby_background, update_lobby, draw_lobby,
@@ -48,10 +52,10 @@ class RhythmGame:
         pygame.display.set_caption("Re:Song")
         self.clock  = pygame.time.Clock()
 
-        self.f_xl = pygame.font.SysFont('monospace', 42, bold=True)
-        self.f_lg = pygame.font.SysFont('monospace', 28, bold=True)
-        self.f_md = pygame.font.SysFont('monospace', 20)
-        self.f_sm = pygame.font.SysFont('monospace', 15)
+        self.f_xl = pygame.font.SysFont('Segoe UI', 42, bold=True)        # Moderna, limpa
+        self.f_lg = pygame.font.SysFont('Segoe UI', 28, bold=True)
+        self.f_md = pygame.font.SysFont('Segoe UI', 20)
+        self.f_sm = pygame.font.SysFont('Segoe UI', 15)
 
         total_lane_w   = LANE_W * LANE_COUNT
         self.lane_left = (W - total_lane_w) // 2 - 85
@@ -80,8 +84,19 @@ class RhythmGame:
             fs.fill(LANE_COLORS[d])
             self._flash_surfs[d] = fs
 
-        self.sprites       = load_sprites('sprites', size=CHAR_SIZE)
-        self.sprites_lobby = load_sprites('sprites', size=CHAR_SIZE_LOBBY)
+        # SISTEMA MONETARIO
+        self.money = 0.0
+        self.money_changed = False
+
+        # SKINS
+        self.unlocked_characters = [Character("Emilia", "sprites_1")]
+        self.shop_characters = [(Character("GB", "sprites_2"), 250), (Character("Vesuvio", "sprites_3"), 350)]
+        self.selected_character = self.unlocked_characters[0]
+        self.sprite_folder = "sprites_1"
+        self.shop_select_index = 0
+
+        self.sprites       = load_sprites(self.sprite_folder, size=CHAR_SIZE)
+        self.sprites_lobby = load_sprites(self.sprite_folder, size=CHAR_SIZE_LOBBY)
 
         fonts = (self.f_xl, self.f_lg, self.f_md, self.f_sm)
         self.menu_bg_image  = load_menu_bg_image()
@@ -112,6 +127,7 @@ class RhythmGame:
         self.input_text     = sys.argv[1] if len(sys.argv) > 1 else ''
         self.menu_error     = ''
         self.difficulty     = 'Normal'
+        self.difficulty_phase = 'Normal'
         self.stage_idx      = 0
         self.selected_stage = None
         self._raw_events    = []
@@ -131,6 +147,8 @@ class RhythmGame:
         self.perfects  = self.goods = self.oks = self.misses = 0
         self.duration  = 0.0
         self.bpm       = 120.0
+
+        self.reward = 0
 
         self.fb_text  = ''
         self.fb_timer = 0.0
@@ -164,8 +182,20 @@ class RhythmGame:
             print(f"Erro ao carregar música de abertura: {e}")
 
         self.menu_timer = 0.0
-        self.alphas  = [0.0] * 7
-        self.delays  = [0.0, 2, 2.4, 2.8, 3.2, 3.6, 4.0]
+        self.alphas  = [0.0] * 9
+        self.delays = [
+            0.0,  # fundo
+            2.0,  # título
+            2.4,  # subtítulo
+
+            2.8,  # jogar
+            3.2,  # configurações
+            3.6,  # tutorial
+            4.0,  # personagens
+            4.4,  # sair
+
+            4.8,  # footer
+        ]
 
         self.settings = {
             "adm_mode": False,
@@ -180,7 +210,7 @@ class RhythmGame:
         """Transição da splash para o menu."""
         self.state      = 'menu'
         self.menu_timer = 0.0
-        self.alphas     = [0.0] * 7
+        self.alphas     = [0.0] * 9
 
     def music_time(self) -> float:
         pos = pygame.mixer.music.get_pos()
@@ -197,6 +227,10 @@ class RhythmGame:
                 alpha = (mt - t0) / (t1 - t0) if t1 > t0 else 0.0
                 return e0 + alpha * (e1 - e0)
         return self.intensity_map[-1][1]
+    
+    def update_sprites_folder(self):
+        self.sprites       = load_sprites(self.sprite_folder, size=CHAR_SIZE)
+        self.sprites_lobby = load_sprites(self.sprite_folder, size=CHAR_SIZE_LOBBY)
 
     def press_key(self, direction: str) -> None:
         mt      = self.music_time()
@@ -238,6 +272,32 @@ class RhythmGame:
         self.char_anim  = f'game_{direction}'
         self.char_timer = 0.30
         self.lane_flash[direction] = 0.22
+
+    def _flash_lane(self, direction: str) -> None:
+        """Efeito visual/animacional quando uma seta é ativada (usado em recording)."""
+        if direction not in self.lane_flash:
+            return
+        self.char_anim  = f'game_{direction}'
+        self.char_timer = 0.30
+        self.lane_flash[direction] = 0.22
+
+    def _tick_timers(self, dt: float) -> None:
+        """Atualiza timers que afetam a renderização (fade do brilho, char_timer, fb_timer)."""
+        # decai o brilho das lanes
+        for d in list(self.lane_flash.keys()):
+            if self.lane_flash[d] > 0.0:
+                self.lane_flash[d] = max(0.0, self.lane_flash[d] - dt)
+
+        # decai timer da animação do personagem
+        if self.char_timer > 0.0:
+            self.char_timer = max(0.0, self.char_timer - dt)
+            if self.char_timer == 0.0:
+                # volta para idle quando acabar o timer
+                self.char_anim = 'game_idle'
+
+        # feedback text timer
+        if self.fb_timer > 0.0:
+            self.fb_timer = max(0.0, self.fb_timer - dt)
 
     def load_song(self, path: str, reuse_raw: bool = False,
                   stage_idx: int = 0, pre_defined: bool = False) -> None:
@@ -424,6 +484,13 @@ class RhythmGame:
                 d = key_map[event.key]
                 print(f"[REC] {t:.3f}s -> {d}")
                 self.recorded_events.append((t, d, 1.0, 0.5))
+                self._flash_lane(d)
+
+    def add_money(self, value:float):
+        if not self.money_changed:
+            self.money += value
+            self.money_changed = True
+
 
     # ── Loop principal ─────────────────────────────────────────────────────────
 
@@ -497,6 +564,10 @@ class RhythmGame:
                                 self.state = 'tutorial'
                             elif action == 'settings':
                                 self.state = 'settings'
+                            elif action == 'character_select':
+                                self.state = 'character_select'
+                            elif action == 'shop':
+                                self.state = 'shop'
                             elif action == 'exit':
                                 self._exit_requested = True
                     elif ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 1:
@@ -511,6 +582,10 @@ class RhythmGame:
                                     self.state = 'tutorial'
                                 elif action == 'settings':
                                     self.state = 'settings'
+                                elif action == 'character_select':
+                                    self.state = 'character_select'
+                                elif action == 'shop':
+                                    self.state = 'shop'
                                 elif action == 'exit':
                                     self._exit_requested = True
 
@@ -529,6 +604,7 @@ class RhythmGame:
 
                 update_lobby(events, dt, self)
                 draw_lobby(self.screen, fonts, self, self._lobby_bg_surf, self.menu_art)
+                self.money_changed = False
 
             # ── TUTORIAL ──────────────────────────────────────────────────────
             elif self.state == 'tutorial':
@@ -576,11 +652,13 @@ class RhythmGame:
 
             # ── RESULTS ───────────────────────────────────────────────────────
             elif self.state == 'results':
+                self.reward = calc_reward(calc_acc(self), self.difficulty_phase)
                 for ev in events:
                     if ev.type == pygame.KEYDOWN:
                         k = ev.key
                         if k == pygame.K_ESCAPE:
                             self.state = 'lobby'
+                            self.add_money(self.reward)
                         elif k == pygame.K_RETURN and self.music_path:
                             self.load_song(self.music_path, reuse_raw=True)
                         elif k in {pygame.K_LEFT, pygame.K_a, pygame.K_RIGHT, pygame.K_d}:
@@ -603,13 +681,166 @@ class RhythmGame:
                     if ev.type == pygame.KEYDOWN:
                         if ev.key == pygame.K_ESCAPE:
                             print("[REC] Cancelado")
+                            self.recorded_events = []
                             pygame.mixer.music.stop()
                             self.state = 'menu'
                         else:
                             self.handle_recording_input(ev)
 
                 self.update_recording()
+                self._tick_timers(dt)
                 draw_playing(self.screen, fonts, self)
+
+            elif self.state == "character_select":
+
+                char_buttons = draw_character_selector(
+                    self.screen,
+                    fonts,
+                    W,
+                    H,
+                    self.menu_art,
+                    self
+                )
+
+                # índice selecionado por teclado
+                if not hasattr(self, "character_select_index"):
+                    self.character_select_index = 0
+
+                total_chars = len(self.unlocked_characters)
+                cols = 3
+
+                for ev in events:
+
+                    if ev.type == pygame.KEYDOWN:
+
+                        # sair
+                        if ev.key == pygame.K_ESCAPE:
+                            self.state = "menu"
+
+                        # mover seleção
+                        elif ev.key in (pygame.K_LEFT, pygame.K_a):
+
+                            self.character_select_index -= 1
+
+                            if self.character_select_index < 0:
+                                self.character_select_index = total_chars - 1
+
+                        elif ev.key in (pygame.K_RIGHT, pygame.K_d):
+
+                            self.character_select_index += 1
+
+                            if self.character_select_index >= total_chars:
+                                self.character_select_index = 0
+
+                        elif ev.key in (pygame.K_UP, pygame.K_w):
+
+                            self.character_select_index -= cols
+
+                            if self.character_select_index < 0:
+                                self.character_select_index = max(0, total_chars - 1)
+
+                        elif ev.key in (pygame.K_DOWN, pygame.K_s):
+
+                            self.character_select_index += cols
+
+                            if self.character_select_index >= total_chars:
+                                self.character_select_index = total_chars - 1
+
+                        # selecionar personagem
+                        elif ev.key == pygame.K_RETURN:
+
+                            char = self.unlocked_characters[self.character_select_index]
+
+                            self.selected_character = char
+                            self.sprite_folder = char.sprites_folder
+
+                            self.update_sprites_folder()
+
+                    # mouse
+                    elif ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 1:
+
+                        mx, my = ev.pos
+
+                        for i, (bx, by, bw, bh, char) in enumerate(char_buttons):
+
+                            if bx <= mx <= bx+bw and by <= my <= by+bh:
+
+                                self.character_select_index = i
+
+                                self.selected_character = char
+                                self.sprite_folder = char.sprites_folder
+
+                                self.update_sprites_folder()
+
+            elif self.state == "shop":
+
+                shop_buttons = draw_shop(
+                    self.screen,
+                    fonts,
+                    W,
+                    H,
+                    self.menu_art,
+                    self
+                )
+
+                for ev in events:
+
+                    if ev.type == pygame.KEYDOWN:
+
+                        if ev.key == pygame.K_ESCAPE:
+                            self.state = "menu"
+
+                        elif ev.key == pygame.K_RIGHT:
+                            self.shop_select_index = min(
+                                self.shop_select_index + 1,
+                                len(self.shop_characters) - 1
+                            )
+
+                        elif ev.key == pygame.K_LEFT:
+                            self.shop_select_index = max(
+                                self.shop_select_index - 1,
+                                0
+                            )
+
+                        elif ev.key == pygame.K_DOWN:
+                            self.shop_select_index = min(
+                                self.shop_select_index + 3,
+                                len(self.shop_characters) - 1
+                            )
+
+                        elif ev.key == pygame.K_UP:
+                            self.shop_select_index = max(
+                                self.shop_select_index - 3,
+                                0
+                            )
+
+                        elif ev.key == pygame.K_RETURN:
+
+                            char, price = self.shop_characters[self.shop_select_index]
+
+                            if (
+                                char not in self.unlocked_characters
+                                and self.money >= price
+                            ):
+
+                                self.money -= price
+                                self.unlocked_characters.append(char)
+
+                    elif ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 1:
+
+                        mx, my = ev.pos
+
+                        for bx, by, bw, bh, char, price in shop_buttons:
+
+                            if bx <= mx <= bx+bw and by <= my <= by+bh:
+
+                                if (
+                                    char not in self.unlocked_characters
+                                    and self.money >= price
+                                ):
+
+                                    self.money -= price
+                                    self.unlocked_characters.append(char)
 
             if self._exit_requested:
                 running = False

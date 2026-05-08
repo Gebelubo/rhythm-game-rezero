@@ -12,6 +12,7 @@ from src.config import (
     HUD_H, DIRECTIONS, LANE_COLORS, LANE_DIM, NOTE_SIZE, WIN_OK
 )
 
+from src.music_backend.utils import calc_acc, calc_reward
 
 def update_playing(game, dt: float) -> str | None:
     mt = game.music_time()
@@ -95,7 +96,7 @@ def draw_playing(screen, fonts, game) -> None:
     line_bresenham(screen, ib_x,      ib_y0+ib_h, ib_x+ib_w, ib_y0+ib_h, (60, 60, 120))
     line_bresenham(screen, ib_x,      ib_y0,      ib_x,      ib_y0+ib_h, (60, 60, 120))
     line_bresenham(screen, ib_x+ib_w, ib_y0,      ib_x+ib_w, ib_y0+ib_h, (60, 60, 120))
-    _txt(screen, f_sm, 'INT', ib_x - 1, ib_y0 - 16, (90, 90, 160))
+    #_txt(screen, f_sm, 'INT', ib_x - 1, ib_y0 - 16, (90, 90, 160))
 
     # Receptores e flash
     for i, d in enumerate(DIRECTIONS):
@@ -133,13 +134,15 @@ def draw_playing(screen, fonts, game) -> None:
     _txt(screen, f_lg, f'SCORE  {game.score:07d}', 16, 12, (220, 220, 255))
     _txt(screen, f_md, f'COMBO  {game.combo}×',    16, 48, (160, 160, 255))
     stage_name = LOBBY_STAGE_NAMES[game.stage_idx] if 0 <= game.stage_idx < len(LOBBY_STAGE_NAMES) else 'Fase'
-    _txt(screen, f_sm, f'FASE  {stage_name}',      16, 78, (180, 180, 255))
+    _txt(screen, f_lg, f'FASE:',      710, 88, (180, 180, 255))
+    _txt(screen, f_lg, stage_name,    710, 128, (220, 220, 255))
+
 
     intensity = game._current_intensity()
     if   intensity < 0.35: mood, mc = 'calmo',    (100, 180, 255)
     elif intensity < 0.65: mood, mc = 'animado',   (130, 255, 130)
     else:                  mood, mc = 'INTENSO!',  (255, 110,  60)
-    _txt(screen, f_sm, f'{game.bpm:.0f} BPM  |  {mood}', W - 220, 12, mc)
+    #_txt(screen, f_sm, f'{game.bpm:.0f} BPM  |  {mood}', W - 220, 12, mc)
 
     # Barra de progresso
     mt2 = game.music_time()
@@ -176,8 +179,7 @@ def draw_results(screen, fonts, game) -> None:
 
     screen.blit(game.bg_surf, (0, 0))
 
-    total = game.perfects + game.goods + game.oks + game.misses
-    acc   = (game.perfects + game.goods * 0.67 + game.oks * 0.33) / max(1, total)
+    acc = calc_acc(game)
 
     if   acc >= 0.95: grade, gc = 'S', (255, 215,   0)
     elif acc >= 0.85: grade, gc = 'A', (180, 255, 100)
@@ -194,7 +196,7 @@ def draw_results(screen, fonts, game) -> None:
     line_bresenham(screen, px+pw, py,    px+pw, py+ph, bc)
 
     dc = DIFFICULTY_COLORS[game.difficulty]
-    _txt(screen, f_lg, f'── RESULTADO  [{game.difficulty}] ──', W // 2, py + 20, dc, center=True)
+    _txt(screen, f_lg, f'-- RESULTADO  [{game.difficulty_phase}] --', W // 2, py + 20, dc, center=True)
 
     rows = [
         (f'PONTUAÇÃO    {game.score:07d}',  (220, 220, 255)),
@@ -206,6 +208,7 @@ def draw_results(screen, fonts, game) -> None:
         (f'ERROS        {game.misses}',      (255,  65,  65)),
         ('',                                 None),
         (f'ACURÁCIA     {acc * 100:.1f}%',  (200, 200, 255)),
+        (f'DINHEIRO     +${game.reward}', (255, 215, 90)),
     ]
     for i, (t, c) in enumerate(rows):
         if c:
@@ -232,6 +235,6 @@ def draw_results(screen, fonts, game) -> None:
 
     _txt(screen, f_sm,
          '←/→ ou A/D muda dificuldade   ENTER: repetir mesmo nível   ESC: menu   Q: sair',
-         W // 2, py + ph - 22, (110, 110, 175), center=True)
+         W // 2, py + ph - 22, (110, 110, 175), center=True, scale_size=1)
 
     return res_diff_btns

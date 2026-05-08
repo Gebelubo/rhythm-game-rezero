@@ -69,11 +69,14 @@ def _blit_alpha(dst: pygame.Surface, src: pygame.Surface, ox: int, oy: int) -> N
                 dst.set_at((dx, dy), (r, g, b))
 
 
-def load_sprites(folder: str = 'sprites', size: int = CHAR_SIZE) -> dict:
+def load_sprites(folder: str = 'sprites/sprites_1', size: int = CHAR_SIZE) -> dict:
     """
     Carrega apenas os metadados e as surfaces brutas do disco.
     O redimensionamento acontece lazy no primeiro draw_char.
     """
+
+    folder = "sprites/" + folder.strip("/\\")  # Normaliza o caminho
+
     sprites = {}
     anim_names = set()
 
@@ -125,7 +128,6 @@ def draw_char(surface: pygame.Surface, sprites: dict,
               anim: str, cx: int, cy: int, frame: int = 0, size: int = CHAR_SIZE) -> None:
 
     frames = sprites.get(anim) or sprites.get('idle')
-
     if frames:
         raw = frames[frame % len(frames)]
         if raw:

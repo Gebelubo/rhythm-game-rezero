@@ -6,9 +6,9 @@ from src.config import CHAR_SIZE_LOBBY
 from src.funcs.cg_lib import (
     line_bresenham, scanline_fill, circle_midpoint,
     draw_rectangle, draw_line_viewport, draw_polygon_viewport,
-    Window, Viewport
+    Window, Viewport, line_bresenham_fast, fill_rectangle_optimized, set_pixel
 )
-from src.utils.ui import _txt, _draw_btn
+from src.utils.ui import _txt, _draw_btn, draw_coin
 from src.music_backend.backend_config import DIFFICULTY_COLORS, DIFFICULTY_NAMES
 from src.sprites import draw_char
 
@@ -169,20 +169,14 @@ def _draw_tree(surf, cx, cy, rng):
 def _world_to_bg(wx, wy):
     return (int(wx - LOBBY_WORLD_XMIN), int(LOBBY_WORLD_YMAX - wy))
 
-def build_lobby_background(fonts) -> pygame.Surface:
-    f_xl, f_lg, f_md, f_sm = fonts
-    width  = LOBBY_WORLD_XMAX - LOBBY_WORLD_XMIN
-    height = LOBBY_WORLD_YMAX - LOBBY_WORLD_YMIN
-    surf   = pygame.Surface((width, height))
-    grad   = pygame.Surface((width, height))
-    rng    = random.Random(42)
-
-    # ── Gradiente original restaurado (sky → ground) ──────────────────────────
-    sky_top    = (18,  38,  88)
-    sky_mid    = (52, 110, 175)
-    horiz      = (55, 110,  65)
-    gnd_mid    = (28,  65,  24)
-    gnd_bottom = (14,  38,  12)
+def _create_gradient_surface(width: int, height: int) -> pygame.Surface:
+    """Cria o gradiente de fundo (céu → chão)"""
+    grad = pygame.Surface((width, height))
+    sky_top = (18, 38, 88)
+    sky_mid = (52, 110, 175)
+    horiz = (55, 110, 65)
+    gnd_mid = (28, 65, 24)
+    gnd_bottom = (14, 38, 12)
 
     for y in range(height):
         t = y / (height - 1)
@@ -198,10 +192,13 @@ def build_lobby_background(fonts) -> pygame.Surface:
         else:
             t2 = (t - 0.72) / 0.28
             col = _lerp_color(gnd_mid, gnd_bottom, t2)
-        pygame.draw.line(grad, col, (0, y), (width - 1, y))
-        pygame.draw.line(surf, col, (0, y), (width - 1, y))
+        line_bresenham_fast(grad, 0, y, width - 1, y, col)
+    
+    return grad
 
-    # ── Grama blendada com gradiente ──────────────────────────────────────────
+
+def _add_grass_texture(surf: pygame.Surface, grad: pygame.Surface, width: int, height: int, rng: random.Random):
+    """Adiciona textura de grama blendada com o gradiente"""
     tile = 4
     for ty in range(0, height, tile):
         for tx in range(0, width, tile):
@@ -213,25 +210,30 @@ def build_lobby_background(fonts) -> pygame.Surface:
             tw = min(tile, width - tx)
             th = min(tile, height - ty)
             _fill_rect(surf, tx, ty, tw, th, blended)
+            
             if rng.random() < 0.20:
                 bright = tuple(min(255, c + 14) for c in blended)
                 cx2 = tx + tw // 2
                 cy2 = ty + th // 2
                 _fill_rect(surf, cx2, cy2, 2, 2, bright)
 
-    # ── Caminhos entre fases ───────────────────────────────────────────────────
+
+def _draw_paths_between_stages(surf: pygame.Surface, width: int, height: int, rng: random.Random):
+    """Desenha os caminhos entre as fases"""
     center_bg = _world_to_bg(0, 0)
     for i in range(4):
         sx, sy = _world_to_bg(*LOBBY_STAGE_POS[i])
         dx = center_bg[0] - sx
         dy = center_bg[1] - sy
-        dist  = max(1, int(math.hypot(dx, dy)))
+        dist = max(1, int(math.hypot(dx, dy)))
         steps = dist // 4
+        
         for step in range(steps + 1):
-            t  = step / max(1, steps)
+            t = step / max(1, steps)
             px = int(sx + dx * t)
             py = int(sy + dy * t)
             _pixel_path(surf, px - 20, py - 20, 40, 40, rng)
+            
             for boff in [(-22, 0), (22, 0), (0, -22), (0, 22)]:
                 bx2 = px + boff[0]
                 by2 = py + boff[1]
@@ -241,101 +243,226 @@ def build_lobby_background(fonts) -> pygame.Surface:
                         darker = tuple(max(0, c - 12) for c in cur)
                         _fill_rect(surf, bx2 - 1, by2 - 1, 3, 3, darker)
 
-    # ── Arbustos ──────────────────────────────────────────────────────────────
+
+def _draw_stage_platform(surf: pygame.Surface, sx: int, sy: int, 
+                         radius: int, color: tuple, bright: tuple, dim: tuple):
+    """Desenha uma plataforma individual de fase com gradiente por vértice"""
+    ring_r = radius + 12
+    
+    # Sombra no solo
+    for shadow_dy in range(-ring_r + 4, ring_r - 4 + 1):
+        row_w = int(math.sqrt(max(0, (ring_r-4)*(ring_r-4) - shadow_dy*shadow_dy)))
+        shade_c = tuple(max(0, c - 30) for c in surf.get_at((
+            min(max(sx, 0), surf.get_width()-1),
+            min(max(sy + shadow_dy + 6, 0), surf.get_height()-1)
+        ))[:3])
+        line_bresenham(surf, sx - row_w + 4, sy + shadow_dy + 6,
+                       sx + row_w + 4, sy + shadow_dy + 6, shade_c)
+    
+    # Anel de grama
+    for dy in range(-ring_r, ring_r + 1):
+        row_w = int(math.sqrt(max(0, ring_r*ring_r - dy*dy)))
+        inner = int(math.sqrt(max(0, radius*radius - dy*dy)))
+        t_ring = abs(dy) / ring_r
+        ring_c = (
+            int(70 + 30 * (1 - t_ring)),
+            int(148 + 22 * (1 - t_ring)),
+            int(62 + 18 * (1 - t_ring)),
+        )
+        for ddx in range(-row_w, -inner):
+            _px(surf, sx+ddx, sy+dy, ring_c)
+        for ddx in range(inner, row_w):
+            _px(surf, sx+ddx, sy+dy, ring_c)
+    
+    # Gradiente por vértice na plataforma
+    color_top = bright
+    color_bottom = dim
+    color_left = tuple(min(255, c + 20) for c in color)
+    color_right = tuple(max(0, c - 10) for c in color)
+    _fill_circle_vertex_gradient(surf, sx, sy, radius,
+                                 color_top, color_bottom,
+                                 color_left, color_right)
+    
+    # Bordas
+    circle_midpoint(surf, sx, sy, radius, tuple(min(255, c+50) for c in color))
+    circle_midpoint(surf, sx, sy, radius-1, tuple(min(255, c+30) for c in color))
+    circle_midpoint(surf, sx, sy, radius-2, tuple(min(255, c+10) for c in color))
+    circle_midpoint(surf, sx, sy, radius-10, tuple(max(0, c-30) for c in color))
+    
+    # Pontos decorativos
+    for angle in range(0, 360, 15):
+        rad = math.radians(angle)
+        ex = int(sx + (radius-3)*math.cos(rad))
+        ey = int(sy + (radius-3)*math.sin(rad))
+        _px(surf, ex, ey, bright)
+
+
+def _draw_platform_badge(surf: pygame.Surface,
+                         sx: int,
+                         sy: int,
+                         radius: int,
+                         color: tuple,
+                         bright: tuple,
+                         name: str,
+                         abbr: str,
+                         fonts):
+
+    f_xl, f_lg, f_md, f_sm = fonts
+
+    # -----------------------------
+    # BADGE INFERIOR
+    # -----------------------------
+
+    text_scale = 2
+    char_w = 5 * text_scale
+    spacing = text_scale
+
+    badge_text_w = len(name) * (char_w + spacing)
+    badge_w = badge_text_w + 20
+    badge_h = 22
+
+    badge_x = sx - badge_w // 2
+    badge_y = sy + radius + 10
+
+    # sombra
+    _fill_rect(
+        surf,
+        badge_x + 2,
+        badge_y + 2,
+        badge_w,
+        badge_h,
+        (8, 10, 8)
+    )
+
+    # fundo
+    _fill_rect(
+        surf,
+        badge_x,
+        badge_y,
+        badge_w,
+        badge_h,
+        (18, 22, 18)
+    )
+
+    # borda
+    draw_rectangle(
+        surf,
+        badge_x,
+        badge_y,
+        badge_w,
+        badge_h,
+        color
+    )
+
+    draw_rectangle(
+        surf,
+        badge_x + 1,
+        badge_y + 1,
+        badge_w - 2,
+        badge_h - 2,
+        tuple(min(255, c + 40) for c in color)
+    )
+
+    # texto do nome
+    _txt(
+        surf,
+        f_sm,
+        name,
+        sx,
+        badge_y + 6,
+        (235, 235, 235),
+        center=True,
+        scale_size=2
+    )
+
+    # -----------------------------
+    # TEXTO CENTRAL
+    # -----------------------------
+
+    # sombra
+    _txt(
+        surf,
+        f_xl,
+        abbr,
+        sx + 2,
+        sy + 2,
+        tuple(max(0, c - 80) for c in color),
+        center=True,
+        scale_size=5
+    )
+
+    # brilho secundário
+    _txt(
+        surf,
+        f_xl,
+        abbr,
+        sx + 1,
+        sy + 1,
+        tuple(max(0, c - 40) for c in bright),
+        center=True,
+        scale_size=5
+    )
+
+    # texto principal
+    _txt(
+        surf,
+        f_xl,
+        abbr,
+        sx,
+        sy,
+        bright,
+        center=True,
+        scale_size=5
+    )
+
+def build_lobby_background(fonts) -> pygame.Surface:
+    """Constrói o fundo completo do lobby"""
+    f_xl, f_lg, f_md, f_sm = fonts
+    width = LOBBY_WORLD_XMAX - LOBBY_WORLD_XMIN
+    height = LOBBY_WORLD_YMAX - LOBBY_WORLD_YMIN
+    surf = pygame.Surface((width, height))
+    rng = random.Random(42)
+    
+    # Gradiente base
+    grad = _create_gradient_surface(width, height)
+    surf.blit(grad, (0, 0))
+    
+    # Textura de grama
+    _add_grass_texture(surf, grad, width, height, rng)
+    
+    # Caminhos entre fases
+    _draw_paths_between_stages(surf, width, height, rng)
+    
+    # Arbustos
     bush_positions = [
-        (180,180),(1420,180),(180,1020),(1420,1020),
-        (500,300),(1100,300),(500,900),(1100,900),
-        (300,600),(1300,600),
-        (750,200),(850,200),(750,1000),(850,1000),
-        (200,480),(200,720),(1400,480),(1400,720),
-        (620,300),(980,300),(620,900),(980,900),
-        (400,480),(400,720),(1200,480),(1200,720),
+        (180,180), (1420,180), (180,1020), (1420,1020),
+        (500,300), (1100,300), (500,900), (1100,900),
+        (300,600), (1300,600), (750,200), (850,200),
+        (750,1000), (850,1000), (200,480), (200,720),
+        (1400,480), (1400,720), (620,300), (980,300),
+        (620,900), (980,900), (400,480), (400,720),
+        (1200,480), (1200,720),
     ]
     for bx, by in bush_positions:
         _draw_bush(surf, bx, by, rng.randint(5, 9), rng)
-
-    # ── Árvores ───────────────────────────────────────────────────────────────
+    
+    # Árvores
     for tx, ty in _TREE_POSITIONS:
         _draw_tree(surf, tx, ty, rng)
-
-    # ── Plataformas das fases — com gradiente por vértice ────────────────────
+    
+    # Plataformas das fases
+    STAGE_ABBRS = ['Re', 'En', 'Rc', 'Le', 'Ps']
     for i, (wx, wy) in enumerate(LOBBY_STAGE_POS):
         sx, sy = _world_to_bg(wx, wy)
         radius = 44 if i < 4 else 64
-        color  = LOBBY_STAGE_COLORS[i]
-        dim    = tuple(max(0, c - 35) for c in color)
+        color = LOBBY_STAGE_COLORS[i]
+        dim = tuple(max(0, c - 35) for c in color)
         bright = tuple(min(255, c + 45) for c in color)
-        ring_r = radius + 12
-
-        # Sombra no solo
-        for shadow_dy in range(-ring_r + 4, ring_r - 4 + 1):
-            row_w = int(math.sqrt(max(0, (ring_r-4)*(ring_r-4) - shadow_dy*shadow_dy)))
-            shade_c = tuple(max(0, c - 30) for c in surf.get_at((
-                min(max(sx, 0), width-1),
-                min(max(sy + shadow_dy + 6, 0), height-1)
-            ))[:3])
-            line_bresenham(surf, sx - row_w + 4, sy + shadow_dy + 6,
-                           sx + row_w + 4, sy + shadow_dy + 6, shade_c)
-
-        # Anel de grama
-        for dy in range(-ring_r, ring_r + 1):
-            row_w = int(math.sqrt(max(0, ring_r*ring_r - dy*dy)))
-            inner = int(math.sqrt(max(0, radius*radius - dy*dy)))
-            t_ring = abs(dy) / ring_r
-            ring_c = (
-                int(70 + 30 * (1 - t_ring)),
-                int(148 + 22 * (1 - t_ring)),
-                int(62 + 18 * (1 - t_ring)),
-            )
-            for ddx in range(-row_w, -inner):
-                _px(surf, sx+ddx, sy+dy, ring_c)
-            for ddx in range(inner, row_w):
-                _px(surf, sx+ddx, sy+dy, ring_c)
-
-        # ── GRADIENTE POR VÉRTICE na plataforma ───────────────────────────────
-        color_top   = bright
-        color_bottom = dim
-        color_left  = tuple(min(255, c + 20) for c in color)
-        color_right = tuple(max(0,   c - 10) for c in color)
-        _fill_circle_vertex_gradient(surf, sx, sy, radius,
-                                     color_top, color_bottom,
-                                     color_left, color_right)
-
-        # Bordas
-        circle_midpoint(surf, sx, sy, radius,    tuple(min(255, c+50) for c in color))
-        circle_midpoint(surf, sx, sy, radius-1,  tuple(min(255, c+30) for c in color))
-        circle_midpoint(surf, sx, sy, radius-2,  tuple(min(255, c+10) for c in color))
-        circle_midpoint(surf, sx, sy, radius-10, tuple(max(0,   c-30) for c in color))
-
-        for angle in range(0, 360, 15):
-            rad = math.radians(angle)
-            ex = int(sx + (radius-3)*math.cos(rad))
-            ey = int(sy + (radius-3)*math.sin(rad))
-            _px(surf, ex, ey, bright)
-
-        # Badge
-        name_surf = f_sm.render(LOBBY_STAGE_NAMES[i], True, (235, 235, 235))
-        badge_w = name_surf.get_width() + 20
-        badge_h = name_surf.get_height() + 10
-        badge_x = sx - badge_w // 2
-        badge_y = sy + radius + 10
-        _fill_rect(surf, badge_x+2, badge_y+2, badge_w, badge_h, (8, 10, 8))
-        _fill_rect(surf, badge_x, badge_y, badge_w, badge_h, (18, 22, 18))
-        draw_rectangle(surf, badge_x, badge_y, badge_w, badge_h, color)
-        draw_rectangle(surf, badge_x+1, badge_y+1, badge_w-2, badge_h-2,
-                       tuple(min(255, c+40) for c in color))
-        surf.blit(name_surf, (badge_x + 10, badge_y + 5))
-
-        STAGE_ABBRS = ['Re', 'En', 'Rc', 'Le', 'Ps']
-        abbr = STAGE_ABBRS[i]
-        abbr_surf = f_xl.render(abbr, True, bright)
-        for soff in [(3,3),(2,2)]:
-            surf.blit(f_xl.render(abbr, True, tuple(max(0, c-60) for c in color)),
-                      (sx - abbr_surf.get_width()//2 + soff[0],
-                       sy - abbr_surf.get_height()//2 + soff[1]))
-        surf.blit(abbr_surf, (sx - abbr_surf.get_width()//2,
-                              sy - abbr_surf.get_height()//2))
-
+        
+        _draw_stage_platform(surf, sx, sy, radius, color, bright, dim)
+        _draw_platform_badge(surf, sx, sy, radius, color, bright,
+                            LOBBY_STAGE_NAMES[i], STAGE_ABBRS[i], fonts)
+    
     return surf
 
 # ── Helpers de coordenada ──────────────────────────────────────────────────────
@@ -411,6 +538,7 @@ def update_lobby(events, dt, game) -> None:
                 elif game.lobby_stage_selected == 4:
                     game._try_start(stage_idx=4)
                 elif game.lobby_stage_selected in {0, 1, 2, 3}:
+                    game.difficulty_phase = game.difficulty
                     game._try_start(stage_idx=game.lobby_stage_selected, difficulty=game.difficulty)
             elif game.lobby_stage_selected in {0,1,2,3} and ev.key in {pygame.K_LEFT, pygame.K_a, pygame.K_RIGHT, pygame.K_d}:
                 idx = DIFFICULTY_NAMES.index(game.difficulty)
@@ -430,6 +558,7 @@ def update_lobby(events, dt, game) -> None:
                 mx, my = ev.pos
                 for lbl, bx, by, bw, bh, name in lobby_difficulty_buttons(W, H):
                     if bx <= mx <= bx+bw and by <= my <= by+bh:
+                        game.difficulty_phase = name
                         game._try_start(stage_idx=game.lobby_stage_selected, difficulty=name)
                         break
 
@@ -444,6 +573,7 @@ def update_lobby(events, dt, game) -> None:
 # ── Draw ───────────────────────────────────────────────────────────────────────
 
 def draw_lobby(screen, fonts, game, lobby_bg_surf, menu_art) -> None:
+    print(f"char: {game.sprite_folder}")
     f_xl, f_lg, f_md, f_sm = fonts
     W, H = screen.get_size()
 
@@ -509,9 +639,12 @@ def draw_lobby(screen, fonts, game, lobby_bg_surf, menu_art) -> None:
 
     # ── Overlay apenas nas faixas de UI (não sobre o mapa) ────────────────────
     overlay = pygame.Surface((W, H), pygame.SRCALPHA)
-    pygame.draw.rect(overlay, (12, 16, 34, 100), (0, 0, W, view_y))
-    pygame.draw.rect(overlay, (12, 16, 34, 100),
-                     (0, view_y + LOBBY_VIEW_H, W, H - view_y - LOBBY_VIEW_H))
+   # Isso NÃO terá transparência - ficará opaco
+    fill_rectangle_optimized(overlay, 0, 0, W, view_y, (12, 16, 34))
+    y_start = view_y + LOBBY_VIEW_H
+    height = H - view_y - LOBBY_VIEW_H
+    fill_rectangle_optimized(overlay, 0, y_start, W, height, (12, 16, 34))  # Sem alpha
+
     screen.blit(overlay, (0, 0))
 
     # ── UI ────────────────────────────────────────────────────────────────────
@@ -552,6 +685,13 @@ def draw_lobby(screen, fonts, game, lobby_bg_surf, menu_art) -> None:
 
     screen.blit(mini_surf, (mini_x, mini_y))
     _txt(screen, f_sm, 'MINI VIEWPORT', mini_x + mini_w//2, mini_y-18, (200,200,230), center=True)
+
+    # ── MONEY HUD ─────────────────────────────────────────────
+
+    draw_coin(screen, 40, 40, 14)
+
+    _txt(screen, f_md, f"{game.money}", 65, 30, (255,255,180))
+
 
     # ── Painel de seleção ─────────────────────────────────────────────────────
     if game.lobby_stage_selected is not None:
@@ -606,4 +746,4 @@ def draw_lobby(screen, fonts, game, lobby_bg_surf, menu_art) -> None:
              W//2, H-24, (180,180,210), center=True)
     else:
         _txt(screen, f_sm, 'ESC = menu  |  ENTER entra na fase  |  selecione a dificuldade e aperte enter para jogar',
-             W//2, H-24, (180,180,210), center=True)
+             W//2, H-24, (180,180,210), center=True, scale_size=1)

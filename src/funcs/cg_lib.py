@@ -44,6 +44,32 @@ def line_bresenham(surface, x0, y0, x1, y1, color):
             y0 += sy
 
 
+def line_bresenham_fast(surface, x0, y0, x1, y1, color):
+    """Versão otimizada sem verificações redundantes"""
+    x0, y0, x1, y1 = int(round(x0)), int(round(y0)), int(round(x1)), int(round(y1))
+    dx, dy = abs(x1 - x0), abs(y1 - y0)
+    sx = 1 if x0 < x1 else -1
+    sy = 1 if y0 < y1 else -1
+    err = dx - dy
+    
+    w, h = surface.get_width(), surface.get_height()
+    
+    while True:
+        # Verificação de limites UNA vez por pixel
+        if 0 <= x0 < w and 0 <= y0 < h:
+            surface.set_at((x0, y0), color)
+        
+        if x0 == x1 and y0 == y1:
+            break
+        e2 = 2 * err
+        if e2 > -dy:
+            err -= dy
+            x0 += sx
+        if e2 < dx:
+            err += dx
+            y0 += sy
+
+
 def circle_midpoint(surface, xc, yc, r, color):
     """Rasterização de círculo pelo algoritmo do ponto médio."""
     x, y = 0, r
@@ -453,6 +479,27 @@ def fill_rectangle(surface, x, y, w, h, color):
 
     for y in range(y0, y1 + 1):
         line_bresenham(surface, x0, y, x1, y, color)
+
+def fill_rectangle_optimized(surface, x, y, w, h, color):
+    """Versão otimizada - preenche linha por linha diretamente"""
+    x0, y0 = int(round(x)), int(round(y))
+    x1, y1 = int(round(x + w)), int(round(y + h))
+    
+    w, h = surface.get_width(), surface.get_height()
+    
+    # Garantir limites
+    x0 = max(0, min(x0, w - 1))
+    x1 = max(0, min(x1, w - 1))
+    y0 = max(0, min(y0, h - 1))
+    y1 = max(0, min(y1, h - 1))
+    
+    if x0 > x1:
+        x0, x1 = x1, x0
+    
+    for y in range(y0, y1 + 1):
+        # Desenha a linha inteira de uma vez
+        for x in range(x0, x1 + 1):
+            surface.set_at((x, y), color)
 
 def scale_texture(texture, new_w, new_h):
     """Escala imagem manualmente (nearest neighbor)."""

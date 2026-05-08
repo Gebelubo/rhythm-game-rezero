@@ -5,65 +5,159 @@ from src.config import (
     DIRECTIONS,
 )
 import random
-def apply_difficulty(raw_events: list, duration: float,
-                     diff_name: str = 'Normal') -> list:
-
-    cfg = DIFFICULTIES[diff_name]
-    thr_base   = cfg['onset_thr_base']
-    thr_k      = cfg['onset_thr_k']
-    min_gap    = cfg['min_gap_ms'] / 1000.0
-    chord_nrg  = cfg['chord_energy']
-    chord_max  = cfg['chord_max']
-    keep_ratio = cfg['keep_ratio']
-
-    candidates = []
-    for t, d, strength, e_local in raw_events:
-        thr = thr_base - thr_k * e_local
-        if strength >= thr:
-            candidates.append((t, d, strength, e_local))
-
-    candidates.sort(key=lambda x: x[0])
-    last_t_per_dir = {d: -999.0 for d in DIRECTIONS}
-    after_gap = []
-    for t, d, strength, e_local in candidates:
-        if t - last_t_per_dir[d] >= min_gap:
-            after_gap.append((t, d, strength, e_local))
-            last_t_per_dir[d] = t
-
-    CHORD_WIN = 0.025
-    groups = []
-    for item in after_gap:
-        if groups and item[0] - groups[-1][0][0] < CHORD_WIN:
-            groups[-1].append(item)
-        else:
-            groups.append([item])
-
-    notes_pool = []
-    for grp in groups:
-        e_local = grp[0][3]
-        if chord_nrg is not None and e_local >= chord_nrg and len(grp) > 1:
-            grp_sorted = sorted(grp, key=lambda x: -x[2])
-            seen, count = set(), 0
-            for t, d, s, e in grp_sorted:
-                if d not in seen and count < chord_max:
-                    notes_pool.append((t, d, s))
-                    seen.add(d)
-                    count += 1
-        else:
-            best = max(grp, key=lambda x: x[2])
-            notes_pool.append((best[0], best[1], best[2]))
+import random
 
 
-    final = []
-    for t, d, strength in notes_pool:
-        p_keep = keep_ratio + (1.0 - keep_ratio) * strength
-        if random.random() < p_keep:
-            final.append((t, d))
+def apply_difficulty(raw_events: list,
+                     duration: float,
+                     diff_name: str = "Normal") -> list:
+    
+    cfg = DIFFICULTIES.get(
+        diff_name,
+        DIFFICULTIES["Normal"]
+    )
+
+    remove_chance = cfg["remove_chance"]
+    add_chance    = cfg["add_chance"]
+    min_gap       = cfg["min_gap"]
+
+    rng = random.Random()
+
+    # ─────────────────────────────────────────
+    # Converte formato do mapa
+    # ─────────────────────────────────────────
+    notes = []
+
+    for ev in raw_events:
+
+        t = float(ev[0])
+        d = ev[1]
+
+        notes.append((t, d))
+
+    notes.sort(key=lambda x: x[0])
+
+    # ─────────────────────────────────────────
+    # REMOVE notas (dificuldade baixa)
+    # ─────────────────────────────────────────
+    filtered = []
+
+    last_per_dir = {
+        d: -999.0
+        for d in DIRECTIONS
+    }
+
+    for t, d in notes:
+
+        # evita spam
+        if t - last_per_dir[d] < min_gap:
+            continue
+
+        last_per_dir[d] = t
+
+        # remover aleatoriamente
+        if rng.random() < remove_chance:
+            continue
+
+        filtered.append((t, d))
+
+    # ─────────────────────────────────────────
+    # ADICIONA notas (dificuldade alta)
+    # ─────────────────────────────────────────
+    extra_notes = []
+
+    for i in range(len(filtered) - 1):
+
+        t1, d1 = filtered[i]
+        t2, d2 = filtered[i + 1]
+
+        gap = t2 - t1
+
+        # espaço muito pequeno
+        if gap < min_gap * 1.5:
+            continue
+
+        # chance de adicionar nota
+        if rng.random() > add_chance:
+            continue
+
+        # tempo da nova nota
+        nt = round(
+            rng.uniform(
+                t1 + min_gap * 0.6,
+                t2 - min_gap * 0.6
+            ),
+            3
+        )
+
+        # direção diferente
+        possible_dirs = [
+            d for d in DIRECTIONS
+            if d != d1
+        ]
+
+        nd = rng.choice(possible_dirs)
+
+        extra_notes.append((nt, nd))
+
+        # chance pequena de chord
+        if diff_name in ("Hard", "Insane"):
+
+            if rng.random() < 0.18:
+
+                chord_dirs = [
+                    d for d in DIRECTIONS
+                    if d != nd
+                ]
+
+                cd = rng.choice(chord_dirs)
+
+                extra_notes.append((nt, cd))
+
+    # ─────────────────────────────────────────
+    # Junta tudo
+    # ─────────────────────────────────────────
+    final = filtered + extra_notes
 
     final.sort(key=lambda x: x[0])
 
-    if not final and notes_pool:
-        final = [(t, d) for t, d, _ in notes_pool]
-        final.sort(key=lambda x: x[0])
+    # ─────────────────────────────────────────
+    # Remove colisões finais
+    # ─────────────────────────────────────────
+    cleaned = []
 
-    return final
+    last_dir_time = {
+        d: -999.0
+        for d in DIRECTIONS
+    }
+
+    for t, d in final:
+
+        if t - last_dir_time[d] < min_gap:
+            continue
+
+        cleaned.append((t, d))
+
+        last_dir_time[d] = t
+
+    # ─────────────────────────────────────────
+    # Garantia mínima
+    # ─────────────────────────────────────────
+    if len(cleaned) < 8:
+
+        beat_gap = max(0.35, duration / 24)
+
+        cleaned = []
+
+        t = 2.0
+
+        while t < duration - 2.0:
+
+            cleaned.append((
+                round(t, 3),
+                rng.choice(DIRECTIONS)
+            ))
+
+            t += beat_gap
+
+    return cleaned
