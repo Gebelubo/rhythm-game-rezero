@@ -15,10 +15,24 @@
 Na raiz do repositório:
 
 ```bash
+python -m run
+```
+
+ou 
+
+```bash
 python3 run.py
 ```
 
 O entrypoint `run.py` instancia `RhythmGame` em `src/main.py`.
+
+## Vídeos de documentação
+
+[![Visão geral (Re:Song)](https://img.youtube.com/vi/CzqVb_gcgOo/hqdefault.jpg)](https://youtu.be/CzqVb_gcgOo)
+
+[![Como rodar (Re:Song)](https://img.youtube.com/vi/SHFaxm7ecAQ/hqdefault.jpg)](https://youtu.be/SHFaxm7ecAQ)
+
+[![Customização (Re:Song)](https://img.youtube.com/vi/O4iYjhTcY0A/hqdefault.jpg)](https://youtu.be/O4iYjhTcY0A)
 
 ## Controles
 
@@ -122,6 +136,7 @@ Para detalhes de formato e manutenção:
 - `docs/BEATMAPS.md` — schema do JSON, como criar/validar beatmaps e dicas de sincronização
 - `docs/ASSETS.md` — convenções de arquivos (músicas, sprites, textura) e checklist
 - `docs/ARCHITECTURE.md` — arquitetura do loop, estados e responsabilidades dos módulos
+- `docs/REQUIREMENTS_MAP.md` — mapeamento dos requisitos da disciplina (CG) → arquivos e linhas do código
 
 ## Troubleshooting (problemas comuns)
 

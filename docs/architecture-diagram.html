@@ -1,0 +1,254 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Re:Song — Diagrama de Arquitetura</title>
+    <style>
+      :root{
+        --bg:#0b1020;
+        --panel:#111a33;
+        --text:#e9ecff;
+        --muted:#b5bce6;
+        --border:#2a3769;
+        --link:#c6b2ff;
+        --code:#0e1630;
+      }
+      html,body{height:100%}
+      body{
+        margin:0;
+        font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, Arial, "Apple Color Emoji","Segoe UI Emoji";
+        background: radial-gradient(1200px 700px at 20% 0%, #1b2a60 0%, transparent 60%),
+                    radial-gradient(900px 600px at 90% 10%, #3b1d6d 0%, transparent 55%),
+                    var(--bg);
+        color:var(--text);
+        line-height:1.45;
+      }
+      .wrap{max-width:1100px;margin:0 auto;padding:32px 18px 60px}
+      h1{margin:0 0 6px;font-size:28px;letter-spacing:.2px}
+      p{margin:10px 0;color:var(--muted)}
+      a{color:var(--link)}
+      .grid{display:grid;grid-template-columns: 1fr;gap:14px;margin-top:16px}
+      .card{
+        background: linear-gradient(180deg, rgba(255,255,255,.04), rgba(255,255,255,.02));
+        border:1px solid var(--border);
+        border-radius:14px;
+        padding:16px 16px 10px;
+        box-shadow: 0 10px 40px rgba(0,0,0,.35);
+      }
+      .card h2{margin:0 0 10px;font-size:16px;color:#f5f6ff}
+      .hint{font-size:12px;color:#9aa4da;margin-top:8px}
+      .badges{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0 0}
+      .badge{
+        border:1px solid var(--border);
+        background: rgba(0,0,0,.15);
+        padding:6px 10px;
+        border-radius:999px;
+        font-size:12px;
+        color:#d4d9ff;
+      }
+      code,kbd{
+        background: var(--code);
+        border:1px solid rgba(255,255,255,.08);
+        padding:2px 6px;
+        border-radius:8px;
+        color:#f0f2ff;
+        font-size: 0.95em;
+      }
+      .footer{margin-top:18px;font-size:12px;color:#97a2d8}
+      .footer code{font-size:12px}
+      .mermaid{
+        background: rgba(10,14,30,.35);
+        border:1px solid rgba(255,255,255,.08);
+        border-radius:12px;
+        padding:12px;
+        overflow:auto;
+      }
+      .two{display:grid;grid-template-columns: 1fr;gap:14px}
+      @media (min-width: 980px){
+        .grid{grid-template-columns: 1fr}
+        .two{grid-template-columns: 1fr 1fr}
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <h1>Re:Song — Diagrama de Arquitetura</h1>
+      <p>
+        Este HTML descreve a arquitetura do projeto (módulos, estados e fluxo de dados).
+        Abra este arquivo no navegador para visualizar os diagramas.
+      </p>
+
+      <div class="badges">
+        <span class="badge">Python + Pygame</span>
+        <span class="badge">State machine</span>
+        <span class="badge">CG: rasterização/fill/viewport/clipping/texture</span>
+        <span class="badge">Beatmaps + detecção (librosa opcional)</span>
+      </div>
+
+      <div class="grid">
+        <div class="card">
+          <h2>Visão geral (componentes e responsabilidades)</h2>
+          <div class="mermaid">
+flowchart TB
+  %% --- Core loop/state ---
+  subgraph CORE["Core do jogo"]
+    RG["RhythmGame\n(src/main.py)\n- loop principal\n- estados\n- timers\n- carrega música/beatmap\n- score/combo/reward"]:::core
+    CFG["Config\n(src/config.py)\n- resolução\n- janelas de timing\n- KEY_MAP"]:::core
+  end
+
+  %% --- Screens ---
+  subgraph SCREENS["Telas (screens)"]
+    MENU["Menu + Splash + Settings + Shop\n(src/screens/menu.py)"]:::screen
+    LOBBY["Lobby (mundo + seleção)\n(src/screens/lobby.py)"]:::screen
+    PLAY["Playing + Results\n(src/screens/playing.py)"]:::screen
+  end
+
+  %% --- Music backend ---
+  subgraph MUSIC["Backend de música / gameplay"]
+    UT["utils.py\n- detect_beats() (librosa opc.)\n- load_beatmap()\n- calc_acc/reward"]:::music
+    DIFF["difficulty.py\napply_difficulty()"]:::music
+    NOTE["note.py\nNote + queda (FALL_TIME)"]:::music
+    BCFG["backend_config.py\n- dificuldades\n- paths\n- bandas→direção"]:::music
+  end
+
+  %% --- Render / assets ---
+  subgraph RENDER["Renderização e assets"]
+    REND["render.py\n- bake_static_bg()\n- bake_arrow_surf()\n- textura (texture_nota.png)"]:::render
+    SPR["sprites.py\n- load_sprites()\n- draw_char() + fallback vetorial"]:::render
+    UI["ui.py / fonts.py\n- pixel font\n- botões\n- moeda"]:::render
+    ASSET["Assets\nmusics/\nsrc/beatmap/\nsprites/\ntexture/"]:::render
+  end
+
+  %% --- CG Library ---
+  subgraph CGLIB["Biblioteca de CG (primitivas)"]
+    CG["cg_lib.py\n- set_pixel\n- Bresenham/círculo/elipse\n- flood/boundary/scanline\n- translate/scale/rotate\n- Window/Viewport\n- Cohen-Sutherland\n- Texture map"]:::cg
+  end
+
+  %% --- Relations ---
+  RG --> MENU
+  RG --> LOBBY
+  RG --> PLAY
+
+  RG --> UT
+  UT --> DIFF
+  DIFF --> NOTE
+  UT --> BCFG
+  BCFG --> RG
+
+  RG --> REND
+  RG --> SPR
+  RG --> UI
+  ASSET --> UT
+  ASSET --> SPR
+  ASSET --> REND
+
+  MENU --> CG
+  LOBBY --> CG
+  PLAY --> CG
+  REND --> CG
+  SPR --> CG
+  UI --> CG
+
+  classDef core fill:#1a2b66,stroke:#89a0ff,color:#fff;
+  classDef screen fill:#2a1c5d,stroke:#c7b5ff,color:#fff;
+  classDef music fill:#183c4d,stroke:#7ee4ff,color:#fff;
+  classDef render fill:#2a3a1f,stroke:#b9ff9a,color:#fff;
+  classDef cg fill:#40203b,stroke:#ffb0f2,color:#fff;
+          </div>
+          <div class="hint">
+            Dica: as rotinas “permitidas” pela disciplina estão concentradas em <code>src/funcs/cg_lib.py</code>;
+            as telas usam essas primitivas para desenhar UI, splash e elementos do jogo.
+          </div>
+        </div>
+
+        <div class="two">
+          <div class="card">
+            <h2>Máquina de estados (alto nível)</h2>
+            <div class="mermaid">
+stateDiagram-v2
+  [*] --> splash
+  splash --> menu: tempo / tecla / clique
+  menu --> lobby: Play
+  menu --> tutorial
+  menu --> settings
+  menu --> character_select
+  menu --> shop
+
+  lobby --> playing: ENTER numa fase
+  playing --> results: música termina
+  results --> lobby: ESC
+  results --> playing: ENTER (replay)
+
+  lobby --> menu: ESC (volta)
+  tutorial --> menu: ESC/clique
+  settings --> menu: ESC
+
+  lobby --> recording: ADM mode + fase fixa
+  recording --> menu: ESC
+  recording --> menu: música termina (salva beatmap)
+            </div>
+            <div class="hint">
+              Estados são controlados por <code>RhythmGame.run()</code> em <code>src/main.py</code>.
+            </div>
+          </div>
+
+          <div class="card">
+            <h2>Fluxo de dados (Input → lógica → render)</h2>
+            <div class="mermaid">
+sequenceDiagram
+  participant P as Player
+  participant PG as Pygame (events/mixer)
+  participant RG as RhythmGame (src/main.py)
+  participant BK as Music Backend (src/music_backend)
+  participant SC as Screens (src/screens/*)
+  participant CG as CG Lib (src/funcs/cg_lib.py)
+
+  P->>PG: teclas / mouse
+  PG->>RG: eventos (KEYDOWN/MOUSE)
+  RG->>SC: chama update/draw do estado atual
+  RG->>BK: detect_beats() ou load_beatmap()
+  BK->>RG: eventos (time,direction) + bpm + duration
+  RG->>RG: apply_difficulty() + cria Notes
+  RG->>PG: mixer.music.play()
+  SC->>CG: rasterização / scanline / textura / viewport
+  SC->>PG: blit surfaces / flip
+            </div>
+            <div class="hint">
+              No gameplay, o hit/miss e score dependem de <code>music_time()</code> (posição do mixer) e das janelas de timing em <code>src/config.py</code>.
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>Pontos de entrada para leitura (arquivos “âncora”)</h2>
+          <p>
+            Se você estiver apresentando o projeto, estes arquivos costumam ser o melhor caminho:
+          </p>
+          <p>
+            <code>src/main.py</code> (loop/estados) •
+            <code>src/screens/menu.py</code> (splash + menus) •
+            <code>src/screens/lobby.py</code> (mundo + minimapa Window/Viewport) •
+            <code>src/screens/playing.py</code> (gameplay/results) •
+            <code>src/funcs/cg_lib.py</code> (primitivas CG) •
+            <code>src/utils/render.py</code> (polígonos + textura das setas)
+          </p>
+          <div class="footer">
+            Arquivo gerado para documentação interna do projeto.
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script type="module">
+      import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+      mermaid.initialize({
+        startOnLoad: true,
+        theme: "dark",
+        securityLevel: "loose",
+        flowchart: { curve: "basis" },
+      });
+    </script>
+  </body>
+</html>
+
