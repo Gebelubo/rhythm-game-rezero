@@ -143,7 +143,7 @@ def draw_char(surface: pygame.Surface, sprites: dict,
         circle_midpoint(surface, cx, cy, i, bg)
 
     if anim in DIRECTIONS:
-        verts = arrow_poly(anim, cx, cy, int(r * 0.58))
+        verts = arrow_poly(cx, cy, int(r * 0.58))
         scanline_fill(surface, verts, c)
         draw_polygon(surface, verts, tuple(min(255, v + 70) for v in c))
     else:
